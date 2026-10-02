@@ -62,7 +62,14 @@ if (cmd == "export")
         prs = fixes.Where(f => f.PrUrl != null).Select(f => new { f.FixerType, f.PrUrl, f.Branch, f.VerificationResult }).DistinctBy(x => x.PrUrl),
         controls = ControlsView(s),
     };
-    var text = JsonSerializer.Serialize(export, new JsonSerializerOptions(Schema.Json) { WriteIndented = false });
+    var node = JsonSerializer.SerializeToNode(export, new JsonSerializerOptions(Schema.Json))!;
+    static void Strip(System.Text.Json.Nodes.JsonNode? n)   // internal hashes the replay does not need (and that secret scanners flag as "generic key")
+    {
+        if (n is System.Text.Json.Nodes.JsonObject o) { o.Remove("idempotency_key"); foreach (var kv in o.ToList()) Strip(kv.Value); }
+        else if (n is System.Text.Json.Nodes.JsonArray a) foreach (var x in a) Strip(x);
+    }
+    Strip(node);
+    var text = node.ToJsonString();
     if (s.Masker.ContainsSecret(text)) throw new InvalidOperationException("export refused: a secret pattern was found in the run data (D-08)");
     var outPath = Path.GetFullPath(Arg("--out") ?? Path.Combine(repoRoot, "replay-static", "run.json"));
     Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);

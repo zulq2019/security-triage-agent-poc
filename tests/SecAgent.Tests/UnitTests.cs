@@ -43,11 +43,11 @@ public class MaskingTests
     {
         var m = new SecretMasker();
         m.Register("super-secret-password-123");
-        var text = "key=AKIAIOSFODNN7EXAMPLE pw=super-secret-password-123 stripe=sk_test_51Habcdefghijklmnop";
+        var text = "key=AKIAIOSFODNN7EXAMPLE pw=super-secret-password-123 stripe=sk_test_51Habcdefghijklmnop";   // gitleaks:allow (synthetic test input)
         var masked = m.Mask(text);
         Assert.DoesNotContain("AKIAIOSFODNN7EXAMPLE", masked);
         Assert.DoesNotContain("super-secret-password-123", masked);
-        Assert.DoesNotContain("sk_test_51Habcdefghijklmnop", masked);
+        Assert.DoesNotContain("sk_test_51Habcdefghijklmnop", masked);   // gitleaks:allow (synthetic test input)
         Assert.Contains("AKIA", masked);           // prefix kept for readability
         Assert.False(m.ContainsSecret(masked));
         Assert.True(m.MaskCount >= 3);
