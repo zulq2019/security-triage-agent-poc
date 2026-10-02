@@ -57,6 +57,10 @@ In the POC, the gateway writes one `ModelUsage` row per call to SQL, and the das
 - **Budgets.** Run token budget, max fixes, max minutes. A high-quality task is never downgraded when budget is low; the run stops instead.
 - **Retries.** Max 2 fixer retries per group. After that the group goes to a human (`fix_failed` task).
 - **Idempotency.** The ledger (`fix:<group>:pr`) plus a `gh pr list` lookup mean re-runs reuse PRs. Branches are never force-pushed; if a branch exists without a PR, a run-suffixed branch is used.
+  - Group keys are scoped (`FixKeys` v2: repository + target PR + target ref + component/fingerprint), so a shared ledger never lets one repo or PR reuse another's fix PR. Unscoped v1 entries are read only as a fallback for the same repository and are then migrated.
+  - A completed entry is revalidated before it is reused (`gh pr view`: the PR must be OPEN, in the same repo, and its base must be the current PR head). Otherwise the entry is superseded (kept for audit as `<key>:superseded:<run>`) and the group is fixed again. `--fresh` skips the router short-circuit; a valid open PR is still reused, so no duplicate is opened.
+- **PR checkout.** The head is fetched as `refs/pull/<n>/head` from the base repository (this works for PRs from forks) and checked against the API head SHA. For fork PRs a verified fix stays local and becomes a `fork_pr_fix` human task: the fix PR's target branch exists only in the fork.
+- **Run limits.** `policies.yaml` budgets are all enforced: tokens/cost in the gateway; `max_fixes` in the router (extra groups go to NEEDS_HUMAN, `budget: max_fixes`); and `max_minutes` as a run deadline. The deadline acts only between pushes (a push gate), records `budget: max_minutes`, and cancels the run (`stopped_budget`; the last checkpoint is kept). Both appear in the Guardrails panel.
 
 ## Source map
 

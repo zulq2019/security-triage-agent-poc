@@ -20,3 +20,10 @@ Times are IST (UTC+5:30).
   - Price book with **placeholder** hosted prices in `models.yaml`. Synthetic seeding (`scripts/seed-usage.sh`, flagged `synthetic=1`, off by default) has a badge and a toggle. The replay export now carries per-call usage.
   - 21 new tests (cost, outcome mapping, IST boundaries, aggregation, budget burn, synthetic generator, SQL boundary/paging integration). 64/64 pass.
   - No new real run: re-runs on PR #1 reuse every triage decision and PR, so they make no model calls. The existing real calls were reused instead.
+- 2026-10-02 ~22:20: **Code-review (Codex) fixes**, one commit per finding, each with regression tests:
+  - P2: the replay export is now run-scoped. The rebuilt replay has the same 7 findings as the Vercel copy.
+  - P1: fork PR heads are fetched via `refs/pull/<n>/head` and the head SHA is verified.
+  - P1: fix/ledger keys are scoped by repo + PR + target ref, with a legacy fallback for the same repo.
+  - P1: ledger PRs are revalidated before reuse (superseded otherwise); `--fresh` bypasses the reuse short-circuit.
+  - P1: `max_fixes` and `max_minutes` are enforced, with a push gate and Guardrails rows.
+  - 76/76 tests pass. No new live run: scoped keys would make a live re-run on the sample PR re-fix and open new GitHub PRs.
