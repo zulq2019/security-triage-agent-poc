@@ -3,11 +3,19 @@ using SecAgent.Core;
 
 namespace SecAgent.Agents.Repo;
 
-public sealed record PrInfo(string Repo, int Number, string Title, string HeadRef, string BaseRef, string HeadSha, string BaseSha, int FilesChanged, int Additions, int Deletions, string Url);
+/// <param name="HeadRepo">Repository the head branch lives in (head.repo.full_name). Differs from <paramref name="Repo"/> for PRs
+/// opened from forks; null when unknown or when the fork was deleted.</param>
+public sealed record PrInfo(string Repo, int Number, string Title, string HeadRef, string BaseRef, string HeadSha, string BaseSha, int FilesChanged, int Additions, int Deletions, string Url, string? HeadRepo = null)
+{
+    public bool IsFork => HeadRepo != null && !string.Equals(HeadRepo, Repo, StringComparison.OrdinalIgnoreCase);
+}
 
 /// <summary>Local git workspace for a run: a clone at the PR head, a base worktree, and one worktree per fix branch.</summary>
-public sealed class GitWorkspace(string workRoot)
+public sealed class GitWorkspace(string workRoot, Func<string, string>? cloneUrl = null)
 {
+    // Injectable so tests can point at a local bare repository instead of github.com.
+    readonly Func<string, string> _cloneUrl = cloneUrl ?? (repo => $"https://github.com/{repo}.git");
+
     const string AgentName = "Security Triage Agent (POC)";
     const string AgentEmail = "secagent-poc@users.noreply.github.com";
 
@@ -25,7 +33,8 @@ public sealed class GitWorkspace(string workRoot)
         var j = JsonNode.Parse(r.StdOut)!;
         return new PrInfo(repo, pr, j["title"]!.GetValue<string>(), j["head"]!["ref"]!.GetValue<string>(), j["base"]!["ref"]!.GetValue<string>(),
             j["head"]!["sha"]!.GetValue<string>(), j["base"]!["sha"]!.GetValue<string>(), j["changed_files"]!.GetValue<int>(),
-            j["additions"]!.GetValue<int>(), j["deletions"]!.GetValue<int>(), j["html_url"]!.GetValue<string>());
+            j["additions"]!.GetValue<int>(), j["deletions"]!.GetValue<int>(), j["html_url"]!.GetValue<string>(),
+            j["head"]?["repo"]?["full_name"]?.GetValue<string>());
     }
 
     public string RunDir(Guid runId) => Path.Combine(workRoot, runId.ToString("N")[..12]);
@@ -37,8 +46,14 @@ public sealed class GitWorkspace(string workRoot)
         Directory.CreateDirectory(dir);
         var head = HeadDir(runId);
         if (!Directory.Exists(Path.Combine(head, ".git")))
-            await Git(dir, ct, "clone", "--quiet", $"https://github.com/{pr.Repo}.git", "head");
-        await Git(head, ct, "fetch", "--quiet", "origin", pr.HeadRef, pr.BaseRef);
+            await Git(dir, ct, "clone", "--quiet", _cloneUrl(pr.Repo), "head");
+        // Fetch the head through the base repository's pull ref, not pr.HeadRef: for PRs from forks the head branch only
+        // exists in the contributor's fork, so "fetch origin <HeadRef>" fails. refs/pull/<n>/head works for both.
+        var pullRef = $"refs/remotes/origin/pr/{pr.Number}";
+        await Git(head, ct, "fetch", "--quiet", "origin", $"+refs/pull/{pr.Number}/head:{pullRef}", $"+refs/heads/{pr.BaseRef}:refs/remotes/origin/{pr.BaseRef}");
+        var fetched = (await Git(head, ct, "rev-parse", pullRef)).Trim();
+        if (!string.Equals(fetched, pr.HeadSha, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"PR #{pr.Number} head moved: GitHub API reported {pr.HeadSha[..Math.Min(12, pr.HeadSha.Length)]} but refs/pull/{pr.Number}/head is {fetched[..Math.Min(12, fetched.Length)]}; re-run against the new head");
         await Git(head, ct, "checkout", "--quiet", "--detach", pr.HeadSha);
         var baseDir = Path.Combine(dir, "base");
         if (!Directory.Exists(baseDir)) await Git(head, ct, "worktree", "add", "--quiet", "--detach", baseDir, pr.BaseSha);

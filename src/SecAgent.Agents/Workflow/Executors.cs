@@ -149,6 +149,17 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         var fix = R.Fixes[m.FixId];
         var findings = m.FindingIds.Select(id => R.Findings[id]).ToList();
         var key = $"fix:{g.Key}:pr";
+        if (R.Pr.IsFork)
+        {
+            // The PR head branch lives in the contributor's fork, so a fix PR cannot target it from the base repository and
+            // pushing a branch here would leave an orphan. Keep the verified fix local and hand it to a human instead.
+            Feed.Entry("orch", $"PR #{R.Pr.Number} comes from fork {R.Pr.HeadRepo}: verified fix on {m.Branch} kept local (no push) → human", "warn", ["inj", "Needs human"]);
+            S.Store.InsertTask(new HumanTask { RunId = RunId, Type = "fork_pr_fix", Title = $"Apply verified fix for {TriageExecutor.Label(findings[0])} in fork {R.Pr.HeadRepo}",
+                Details = $"Fix commit {Short(fix.CommitSha ?? "")} on local branch {m.Branch} passed verification. The PR head ({R.Pr.HeadRef}) is in {R.Pr.HeadRepo}; ask the contributor to apply it.",
+                FindingIds = m.FindingIds, Owner = "[owner team]" });
+            g.Outcome = "needs_human";
+            return;
+        }
         var e = Feed.Entry("orch", $"opening fix PR for {FixerName(m.FixerId)} · {m.Branch}");
         var taken = S.Store.TryTake(key, "pr", TimeSpan.FromMinutes(30));
         GitHubPrs.Pr? pr = null;
