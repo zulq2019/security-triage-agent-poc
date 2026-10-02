@@ -225,3 +225,27 @@ public class UsageStoreTests
         finally { s.DeleteUsageForRuns([run]); }
     }
 }
+
+/// <summary>Regression (review P2): the replay export must only contain findings of the exported run.</summary>
+public class RunScopedFindingsTests
+{
+    [Fact]
+    public void FindingsForRun_returns_only_findings_with_an_occurrence_in_that_run()
+    {
+        var s = TestEnv.Store();
+        Guid runA = Guid.NewGuid(), runB = Guid.NewGuid();
+        Finding F(Guid run) => new() { Repo = "test/scope", IssueType = IssueTypes.Secret, Title = "scoped " + run, SourceScanner = "test", ScannerRuleId = "r",
+            Fingerprint = Hashing.Sha256(Guid.NewGuid().ToString())[..64], CreatedByRun = run, RawEvidenceRef = "x", SarifRef = "x", Branch = "b", CommitSha = "c" };
+        try
+        {
+            var a = s.UpsertFinding(F(runA), runA).Stored;
+            var b = s.UpsertFinding(F(runB), runB).Stored;
+            var onlyA = s.FindingsForRun(runA);
+            Assert.Single(onlyA);
+            Assert.Equal(a.FindingId, onlyA[0].FindingId);
+            Assert.DoesNotContain(s.FindingsForRun(runA), f => f.FindingId == b.FindingId);
+            Assert.Contains(s.ListFindings(), f => f.FindingId == b.FindingId);   // the live view still lists everything
+        }
+        finally { s.DeleteFindingsCreatedBy(runA); s.DeleteFindingsCreatedBy(runB); }
+    }
+}

@@ -76,7 +76,7 @@ if (cmd == "export")
     {
         format = "secagent-run-replay/1", exported_at = DateTime.UtcNow, note = "Replay of a recorded run. Synthetic sample repo; secret values were masked before they were recorded.",
         run, provider = s.Cfg.Gateway.Label, duration_seconds = run.EndedAt is { } en ? (en - run.StartedAt).TotalSeconds : (double?)null,
-        events, findings = FindingsView(s), decisions = s.Store.DecisionsForRun(id), fixes, tasks = s.Store.TasksForRun(id),
+        events, findings = FindingsView(s, id), decisions = s.Store.DecisionsForRun(id), fixes, tasks = s.Store.TasksForRun(id),
         routing = s.Store.RoutingForRun(id).Select(r => new { r.task_type, r.tier, r.chosen_model_id, r.required_quality, r.reason, r.tokens_in, r.tokens_out, r.latency_ms, r.outcome }),
         prs = fixes.Where(f => f.PrUrl != null).Select(f => new { f.FixerType, f.PrUrl, f.Branch, f.VerificationResult }).DistinctBy(x => x.PrUrl),
         controls = ControlsView(s),
@@ -199,7 +199,8 @@ app.Run($"http://127.0.0.1:{port}");
 return 0;
 
 // Shared projections (API and `secagent export` use the same shapes, so the replay UI renders exactly what the live UI rendered).
-static object FindingsView(AgentServices svc) => svc.Store.ListFindings().Select(f => new
+// runId = null: every finding in the store (live dashboard). With a run id: only findings that run saw (FindingOccurrence), for the replay export.
+static object FindingsView(AgentServices svc, Guid? runId = null) => (runId is { } rid ? svc.Store.FindingsForRun(rid) : svc.Store.ListFindings()).Select(f => new
 {
     f.FindingId, f.IssueType, f.Title, f.SourceScanner, f.ScannerRuleId, f.SeverityScanner, f.SeverityEffective, f.Status, f.Bucket, f.FilePath, f.ComponentName,
     f.ComponentVersion, f.FixedVersion, f.CveIds, f.LicenceId, f.Fingerprint, f.InjectionFlag, f.FirstSeen, f.LastSeen, f.OccurrenceCount,

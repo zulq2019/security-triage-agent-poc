@@ -66,6 +66,18 @@ public sealed class SqlStore
 
     public Finding? FindingByFingerprint(string fp) { using var c = Open(); return c.QuerySingleOrDefault<Finding>($"SELECT {FindingCols} FROM Finding WHERE fingerprint=@fp", new { fp }); }
     public Finding? GetFinding(Guid id) { using var c = Open(); return c.QuerySingleOrDefault<Finding>($"SELECT {FindingCols} FROM Finding WHERE finding_id=@id", new { id }); }
+    /// <summary>Findings seen in one run (via FindingOccurrence), for run-scoped views such as the replay export.</summary>
+    public List<Finding> FindingsForRun(Guid runId)
+    {
+        using var c = Open();
+        return c.Query<Finding>($"SELECT {FindingCols} FROM Finding WHERE finding_id IN (SELECT finding_id FROM FindingOccurrence WHERE run_id=@runId) ORDER BY last_seen DESC", new { runId }).ToList();
+    }
+    /// <summary>Test helper: removes findings created by a (test-only) run and their occurrences/history.</summary>
+    public void DeleteFindingsCreatedBy(Guid runId)
+    {
+        using var c = Open();
+        c.Execute("DELETE FROM FindingOccurrence WHERE finding_id IN (SELECT finding_id FROM Finding WHERE created_by_run=@runId); DELETE FROM StatusHistory WHERE finding_id IN (SELECT finding_id FROM Finding WHERE created_by_run=@runId); DELETE FROM Finding WHERE created_by_run=@runId", new { runId });
+    }
     public List<Finding> ListFindings() { using var c = Open(); return c.Query<Finding>($"SELECT {FindingCols} FROM Finding ORDER BY last_seen DESC").ToList(); }
 
     /// <summary>Dedupe by fingerprint: insert NEW or link an occurrence to the existing record.</summary>
