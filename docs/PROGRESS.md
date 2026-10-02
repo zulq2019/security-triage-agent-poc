@@ -12,3 +12,5 @@ Times are IST (UTC+5:30).
   (d) The unsafe fix used `SqlParameter` 3 times, so the build failed and it went to a human after retries. Guidance is now provider-specific, with a pre-build forbidden-type check and one repair call.
 - 2026-10-02 ~21:00: **Clean end-to-end run** (9bcd4579, 8 min 25 s, 16.7k tokens): all 7 golden cases pass. Unsafe fix verified on attempt 1 (PR #5), binary removed (PR #6), fixture secret suppressed by rule (the model proposed "fix"), licence → human, PRs #2/#3 reused. 43/43 tests pass.
   - Added: model provider switch (ollama | openai | azureopenai, key from env only, 3b-only profile), Windows-safe tool lookup, `secagent export`, replay mode, `replay-static/`.
+- 2026-10-02 ~21:11: D-06 re-run passed (6.9 s, 0 new PRs). Kill-switch test passed (stopped in 2.2 s; new runs refused). 43/43 tests pass. gitleaks (with a narrow repo allowlist) and trivy are clean on this repo.
+  - Published the private repo `zulq2019/security-triage-agent-poc` (`main` = README only) and opened PR #1 from `feature/slice-1-tracer-bullet`. Not merged.
