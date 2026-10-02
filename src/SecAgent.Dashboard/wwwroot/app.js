@@ -313,7 +313,8 @@ async function loadControls(){
 }
 
 // ------------------------------------------------ usage tab ------------------------------------------------
-// Live: /api/usage/* (filters applied server-side). Replay: precomputed views from run.json (REC.usage), filters disabled.
+// Live: /api/usage/* (filters applied server-side). Replay: the same filters and aggregation run in the browser (UL below) over
+// static rows from run.json: the recorded run's real calls (REC.usage.calls) plus an optional SYNTHETIC sample (REC.usage_sample).
 const AGENT_NAMES = {'triage-agent':'Triage', library:'Library fixer', secrets:'Secrets fixer', unsafe_code:'Unsafe code fixer', binary_licence:'Binary/Licence fixer', verifier:'Verifier'};
 const PROV_NAMES = {ollama:'Ollama · local', openai:'OpenAI', azureopenai:'Azure OpenAI', mixed:'mixed'};
 const us = {range:'7d', from:null, to:null, model:'', agent:'', run:'', synthetic:true, page:1, size:25, facetsKey:''};
@@ -334,28 +335,144 @@ function uq(extra){
   for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
   return p.toString();
 }
-const uget = async (path, extra) => (await fetch(`/api/usage/${path}?${uq(extra)}`)).json();
+const uapi = async (path, p) => REPLAY ? UL.api(path, p) : (await fetch(`/api/usage/${path}?${p}`)).json();
+const uget = (path, extra) => uapi(path, new URLSearchParams(uq(extra)));
+
+// Replay usage engine: a port of /api/usage/{summary,calls,budget,facets,calls.csv} (UsageAggregator, Store.UsageFacets, UsageCsv).
+// "Today" is the recorded run's IST day (REC.usage.as_of): the replay is a static snapshot, so presets are anchored there.
+const UL = {rows: [], today: null, policy: null, sample: null,
+  // C# Math.Round(x, d) rounds half to even; mirror it so the replay shows the same numbers as the API
+  rnd(x, d){ const m = Math.pow(10, d), v = x * m, f = Math.floor(v), r = v - f; return (r > 0.5 + 1e-9 || (Math.abs(r - 0.5) <= 1e-9 && f % 2 !== 0) ? f + 1 : f) / m; },
+  ymd: ms => new Date(ms + 330 * 60000).toISOString().slice(0, 10),
+  addDays: (d, n) => new Date(Date.parse(d + 'T00:00:00Z') + n * 864e5).toISOString().slice(0, 10),
+  init(){
+    const U = REC && REC.usage; if (!U) return false;
+    const S = REC.usage_sample;
+    const real = (U.calls || []).map(c => Object.assign({}, c, {synthetic: false}));
+    const syn = S ? S.rows.map(r => { const o = Object.fromEntries(S.columns.map((k, i) => [k, r[i]])); o.fallback_used = !!o.fallback_used; o.cache_hit = !!o.cache_hit; o.synthetic = true; o.total_tokens = o.input_tokens + o.output_tokens; return o; }) : [];
+    UL.rows = real.concat(syn).map(r => { r._ms = utcDate(r.ts_utc).getTime(); r._day = UL.ymd(r._ms); return r; }).sort((a, b) => a._ms - b._ms);
+    UL.today = U.as_of || (U.filter && U.filter.to) || UL.ymd(Date.now());
+    UL.policy = U.policy || {budgets: {pr: {tokens: (U.budget && U.budget.runs && U.budget.runs.cap_tokens) || 0}}, usage_budgets: {daily_tokens: 0, monthly_tokens: 0, monthly_cost: 0}};
+    UL.sample = S || null;
+    return true;
+  },
+  filter(p){
+    const T = UL.today, r = p.get('range') || '7d';
+    let from = p.get('from'), to = p.get('to');
+    if (!(from && to)){ to = T; from = r === 'today' ? T : r === '30d' ? UL.addDays(T, -29) : UL.addDays(T, -6); }
+    if (to < from) [from, to] = [to, from];
+    const days = Math.round((Date.parse(to) - Date.parse(from)) / 864e5) + 1;
+    const syn = ['exclude', 'only'].includes(p.get('synthetic')) ? p.get('synthetic') : 'include';
+    return {from, to, days, tz: 'Asia/Kolkata (IST, UTC+5:30)', model: p.get('model') || null, agent: p.get('agent') || null, provider: p.get('provider') || null,
+      task: p.get('task') || null, run: p.get('run') || null, synthetic: syn};
+  },
+  query(f){
+    return UL.rows.filter(r => r._day >= f.from && r._day <= f.to && (!f.model || r.model_id === f.model) && (!f.agent || r.agent_id === f.agent) &&
+      (!f.provider || r.provider === f.provider) && (!f.task || r.task_purpose === f.task) && (!f.run || r.run_id === f.run) &&
+      (f.synthetic === 'include' || (f.synthetic === 'exclude' ? !r.synthetic : r.synthetic)));
+  },
+  totals(rows){
+    const calls = rows.filter(r => !r.cache_hit), lat = calls.map(r => r.latency_ms).sort((a, b) => a - b);
+    const t = {calls: calls.length, cache_hits: rows.length - calls.length,
+      input_tokens: rows.reduce((a, r) => a + r.input_tokens, 0), output_tokens: rows.reduce((a, r) => a + r.output_tokens, 0), cost: rows.reduce((a, r) => a + (+r.cost || 0), 0),
+      avg_latency_ms: lat.length ? UL.rnd(lat.reduce((a, x) => a + x, 0) / lat.length, 1) : 0,
+      p95_latency_ms: lat.length ? lat[Math.min(lat.length - 1, Math.ceil(lat.length * 0.95) - 1)] : 0,
+      errors: calls.filter(r => r.outcome === 'error').length, timeouts: calls.filter(r => r.outcome === 'timeout').length,
+      retries: calls.filter(r => r.schema_attempts > 1).length, fallbacks: calls.filter(r => r.fallback_used).length,
+      runs: new Set(rows.map(r => r.run_id)).size, synthetic_rows: rows.filter(r => r.synthetic).length, real_rows: rows.filter(r => !r.synthetic).length,
+      has_placeholder_prices: rows.some(r => r.price_source === 'placeholder'), all_local: rows.every(r => r.provider === 'ollama')};
+    t.total_tokens = t.input_tokens + t.output_tokens;
+    t.error_rate = t.calls ? UL.rnd((t.errors + t.timeouts) / t.calls, 4) : 0;
+    t.retry_rate = t.calls ? UL.rnd(t.retries / t.calls, 4) : 0;
+    return t;
+  },
+  keyOf: (r, by) => by === 'model' ? r.model_id : by === 'agent' ? r.agent_id : by === 'task' ? r.task_purpose : by === 'run' ? r.run_id : by === 'day' ? r._day : r.provider,
+  group(rows, by, from, to){
+    const all = UL.totals(rows), m = new Map();
+    for (const r of rows){ const k = UL.keyOf(r, by); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+    const r1 = x => UL.rnd(x, 1);
+    const groups = [...m].map(([key, list]) => {
+      const t = UL.totals(list), first = list[0];
+      return {key, provider: new Set(list.map(r => r.provider)).size === 1 ? first.provider : 'mixed',
+        ...(by === 'run' ? {repo: first.repo, pr_number: first.pr_number, mode: first.mode} : {}),
+        calls: t.calls, cache_hits: t.cache_hits, input_tokens: t.input_tokens, output_tokens: t.output_tokens, total_tokens: t.total_tokens, cost: t.cost,
+        avg_latency_ms: t.avg_latency_ms, errors: t.errors + t.timeouts, retries: t.retries,
+        pct_tokens: all.total_tokens ? r1(100 * t.total_tokens / all.total_tokens) : 0, pct_cost: all.cost ? r1(100 * t.cost / all.cost) : 0, pct_calls: all.calls ? r1(100 * t.calls / all.calls) : 0,
+        local: t.all_local, placeholder: t.has_placeholder_prices, synthetic_rows: t.synthetic_rows, _last: list[list.length - 1]._ms,
+        first_utc: first.ts_utc, last_utc: list[list.length - 1].ts_utc};
+    });
+    if (by === 'day' && from && to){
+      const have = new Set(groups.map(g => g.key));
+      for (let d = from; d <= to; d = UL.addDays(d, 1)) if (!have.has(d)) groups.push({key: d, calls: 0, cache_hits: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, cost: 0, avg_latency_ms: 0, errors: 0, retries: 0, pct_tokens: 0, pct_cost: 0, pct_calls: 0, local: true, synthetic_rows: 0});
+      return groups.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    }
+    return by === 'run' ? groups.sort((a, b) => b._last - a._last) : groups.sort((a, b) => b.total_tokens - a.total_tokens || b.calls - a.calls);
+  },
+  budget(win, f){
+    const T = UL.today, [y, mo, dd] = T.split('-').map(Number), monthStart = T.slice(0, 8) + '01';
+    const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate(), elapsed = dd, ub = UL.policy.usage_budgets || {}, bud = UL.policy.budgets || {};
+    const month = UL.query(Object.assign({}, f, {from: monthStart, to: T}));
+    const sumTok = rs => rs.reduce((a, r) => a + r.input_tokens + r.output_tokens, 0);
+    const winTokens = sumTok(win), winBudget = (ub.daily_tokens || 0) * f.days, mTokens = sumTok(month), mCost = month.reduce((a, r) => a + (+r.cost || 0), 0);
+    const firstCap = (Object.values(bud)[0] || {}).tokens || 0;
+    const runs = UL.group(win, 'run').map(g => { const cap = (bud[g.mode || 'pr'] || {}).tokens ?? firstCap;
+      return {run_id: g.key, repo: g.repo, pr_number: g.pr_number, mode: g.mode, tokens: g.total_tokens, cap_tokens: cap, cost: g.cost,
+        pct: cap ? UL.rnd(100 * g.total_tokens / cap, 1) : 0, synthetic: g.synthetic_rows > 0, last_utc: g.last_utc}; });
+    const label = new Intl.DateTimeFormat('en-GB', {month: 'short', year: 'numeric', timeZone: 'UTC'}).format(new Date(monthStart + 'T00:00:00Z'));
+    return {
+      window: {from: f.from, to: f.to, days: f.days, tokens: winTokens, budget_tokens: winBudget, pct: winBudget ? UL.rnd(100 * winTokens / winBudget, 1) : 0, daily_budget_tokens: ub.daily_tokens || 0},
+      month: {label, from: monthStart, to: T, days_elapsed: elapsed, days_in_month: daysInMonth, tokens: mTokens, budget_tokens: ub.monthly_tokens || 0,
+        pct_tokens: ub.monthly_tokens ? UL.rnd(100 * mTokens / ub.monthly_tokens, 1) : 0, projected_tokens: Math.round(mTokens / elapsed * daysInMonth),
+        cost: mCost, budget_cost: ub.monthly_cost || 0, pct_cost: ub.monthly_cost ? UL.rnd(100 * mCost / ub.monthly_cost, 1) : 0, projected_cost: UL.rnd(mCost / elapsed * daysInMonth, 4)},
+      runs: {cap_tokens: (bud.pr || {}).tokens || 0, count: runs.length, avg_pct: runs.length ? UL.rnd(runs.reduce((a, r) => a + r.pct, 0) / runs.length, 1) : 0,
+        max_pct: runs.length ? Math.max(...runs.map(r => r.pct)) : 0, over_80: runs.filter(r => r.pct >= 80).length, items: runs.slice(0, 12)},
+    };
+  },
+  facets(f){
+    const rows = UL.query({from: f.from, to: f.to, synthetic: f.synthetic});
+    const models = new Map(); rows.forEach(r => models.set(r.model_id, r.provider));
+    const runs = UL.group(rows, 'run').slice(0, 200).map(g => ({run_id: g.key, repo: g.repo, pr_number: g.pr_number, synthetic: g.synthetic_rows > 0 ? 1 : 0, last_utc: g.last_utc}));
+    return {models: [...models].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([model, provider]) => ({model, provider})), agents: [...new Set(rows.map(r => r.agent_id))].sort(),
+      runs, any_synthetic: UL.rows.some(r => r.synthetic)};
+  },
+  csv(rows){
+    const C = v => { const s = v == null ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const ist = ms => new Date(ms + 330 * 60000).toISOString().slice(0, 19).replace('T', ' ') + ' IST';
+    const head = 'ts_utc,ts_ist,run_id,repo,pr_number,mode,agent_id,task_purpose,tier,model_id,model_version,deployment,provider,input_tokens,output_tokens,total_tokens,latency_ms,cost_usd,price_source,outcome,outcome_detail,schema_attempts,fallback_used,cache_hit,synthetic\n';
+    return head + rows.map(u => [new Date(u._ms).toISOString().slice(0, 19) + 'Z', ist(u._ms), u.run_id, u.repo, u.pr_number, u.mode, u.agent_id, u.task_purpose, u.tier, u.model_id,
+      u.model_version, u.deployment, u.provider, u.input_tokens, u.output_tokens, u.input_tokens + u.output_tokens, u.latency_ms, +u.cost || 0, u.price_source, u.outcome, u.outcome_detail,
+      u.schema_attempts, u.fallback_used ? 1 : 0, u.cache_hit ? 1 : 0, u.synthetic ? 1 : 0].map(C).join(',')).join('\n') + (rows.length ? '\n' : '');
+  },
+  async api(path, p){
+    const f = UL.filter(p), rows = UL.query(f), out = x => JSON.parse(JSON.stringify(x));
+    if (path === 'summary'){ const by = p.get('groupBy'); return out({filter: f, totals: UL.totals(rows), group_by: by, groups: by ? UL.group(rows, by, f.from, f.to) : null}); }
+    if (path === 'calls'){
+      const page = Math.max(1, +p.get('page') || 1), size = Math.min(500, Math.max(1, +p.get('pageSize') || 25)), desc = rows.slice().reverse();
+      return out({filter: f, page, page_size: size, total: rows.length, pages: Math.ceil(rows.length / size), items: desc.slice((page - 1) * size, page * size)});
+    }
+    if (path === 'budget') return out(UL.budget(rows, f));
+    if (path === 'facets') return out(UL.facets(f));
+    if (path === 'calls.csv'){
+      const name = `secagent-usage_${f.from.replace(/-/g, '')}-${f.to.replace(/-/g, '')}${f.synthetic === 'exclude' ? '_real' : rows.some(r => r.synthetic) ? '_incl-synthetic' : ''}.csv`;
+      return {name, text: UL.csv(rows)};
+    }
+    throw new Error('unknown usage path ' + path);
+  }};
 
 async function loadUsage(){
   let sum, day, model, agent, task, calls, budget;
-  if (REPLAY){
-    const U = REC && REC.usage;
-    if (!U){ $('#uKpis').innerHTML = '<div class="u-empty" style="grid-column:1/-1">This replay was exported without usage data.</div>'; return; }
-    sum = {filter: U.filter, totals: U.totals}; day = U.by.day; model = U.by.model; agent = U.by.agent; task = U.by.task; budget = U.budget;
-    const items = U.calls.slice().sort((a, b) => utcDate(b.ts_utc) - utcDate(a.ts_utc));
-    calls = {total: items.length, page: us.page, page_size: us.size, pages: Math.ceil(items.length / us.size), items: items.slice((us.page - 1) * us.size, us.page * us.size)};
-    $('.u-bar').innerHTML = `<span class="lbl">Replay</span><span class="note">Usage of this recorded run only (real calls, no synthetic data) · filters need the live backend</span>`;
-  } else {
-    [sum, day, model, agent, task, calls, budget] = await Promise.all([uget('summary'), uget('summary', {groupBy:'day'}), uget('summary', {groupBy:'model'}),
-      uget('summary', {groupBy:'agent'}), uget('summary', {groupBy:'task'}), uget('calls', {page: us.page, pageSize: us.size}), uget('budget')]);
-    day = day.groups; model = model.groups; agent = agent.groups; task = task.groups;
-    loadFacets();
-    $('#uCsv').href = '/api/usage/calls.csv?' + uq();
-  }
+  if (REPLAY && !UL.today){ $('#uKpis').innerHTML = '<div class="u-empty" style="grid-column:1/-1">This replay was exported without usage data.</div>'; return; }
+  [sum, day, model, agent, task, calls, budget] = await Promise.all([uget('summary'), uget('summary', {groupBy:'day'}), uget('summary', {groupBy:'model'}),
+    uget('summary', {groupBy:'agent'}), uget('summary', {groupBy:'task'}), uget('calls', {page: us.page, pageSize: us.size}), uget('budget')]);
+  day = day.groups; model = model.groups; agent = agent.groups; task = task.groups;
+  loadFacets();
+  $('#uCsv').href = REPLAY ? '#' : '/api/usage/calls.csv?' + uq();
   const t = sum.totals, f = sum.filter;
   { const sb = $('#uSynBadge'); if (sb) sb.style.display = t.synthetic_rows > 0 ? '' : 'none'; }
   $('#uSub').innerHTML = `<span><b>${esc(f.from)}</b> → <b>${esc(f.to)}</b> IST · ${f.days} day${f.days > 1 ? 's' : ''}</span><span>·</span><span>${t.runs} run${t.runs === 1 ? '' : 's'} · ${fmtN(t.real_rows)} real row${t.real_rows === 1 ? '' : 's'}${t.synthetic_rows ? ` · <b style="color:#8a5a00">${fmtN(t.synthetic_rows)} synthetic</b>` : ''}</span>` +
-    (us.model || us.agent || us.run ? `<span>·</span><span>filtered: ${[us.model && 'model ' + esc(us.model), us.agent && 'agent ' + esc(agentName(us.agent)), us.run && 'run ' + esc(us.run.slice(0, 8))].filter(Boolean).join(', ')}</span>` : '');
+    (us.model || us.agent || us.run ? `<span>·</span><span>filtered: ${[us.model && 'model ' + esc(us.model), us.agent && 'agent ' + esc(agentName(us.agent)), us.run && 'run ' + esc(us.run.slice(0, 8))].filter(Boolean).join(', ')}</span>` : '') +
+    (REPLAY ? `<span>·</span><span>static snapshot as of <b>${esc(istDay(new Date(UL.today + 'T00:00:00+05:30')))} ${UL.today.slice(0, 4)}</b> IST (no backend)</span>` +
+      (t.synthetic_rows ? `<span class="u-synnote"><b>Synthetic sample data:</b> generated rows (seed ${esc(UL.sample && UL.sample.seed)}) for fictional <code>synthetic-org/*</code> repos, mixed with the ${fmtN(t.real_rows)} real call${t.real_rows === 1 ? '' : 's'} of recorded run ${esc(REC.run.run_id.slice(0, 8))}. Hosted model names and prices are <b>placeholders</b>, not real or current prices. Turn off “Show synthetic” for real usage only.</span>` : '') : '');
   const errRate = t.error_rate, retRate = t.retry_rate;
   $('#uKpis').innerHTML = [
     ['Model calls', fmtN(t.calls), t.cache_hits ? `<b>${fmtN(t.cache_hits)}</b> cache hits (no tokens)` : `${t.runs} run${t.runs === 1 ? '' : 's'} in range`],
@@ -449,14 +566,13 @@ function renderCalls(p){
 async function openRun(runId){
   const d = $('#uDrawer');
   let items, t;
-  if (REPLAY){ items = REC.usage.calls; t = REC.usage.totals; }
-  else {
+  {
     const q = new URLSearchParams({range:'30d', run: runId, pageSize: 500}); if (!us.synthetic) q.set('synthetic', 'exclude');
     // a run can be older than 30 days: widen the window to a year for the drill-down
-    q.delete('range'); const to = new Date(); const from = new Date(Date.now() - 365 * 864e5);
+    q.delete('range'); const to = REPLAY ? new Date(UL.today + 'T12:00:00+05:30') : new Date(); const from = new Date(to.getTime() - 365 * 864e5);
     const ymd = x => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata'}).format(x);
     q.set('from', ymd(from)); q.set('to', ymd(to));
-    const [c, s] = await Promise.all([(await fetch('/api/usage/calls?' + q)).json(), (await fetch('/api/usage/summary?' + q)).json()]);
+    const [c, s] = await Promise.all([uapi('calls', q), uapi('summary', q)]);
     items = c.items.slice().reverse(); t = s.totals;
   }
   const first = items[0] || {}, syn = items.some(x => x.synthetic);
@@ -466,18 +582,19 @@ async function openRun(runId){
     <div class="db">
       <div class="kpis">${[['Calls', fmtN(t.calls) + (t.cache_hits ? ` <span style="font-size:12px;color:var(--ink-3)">+${t.cache_hits} cached</span>` : '')], ['Tokens', fmtN(t.total_tokens)],
         ['Cost', t.all_local ? '$0' : fmtUsd(t.cost)], ['Model time', fmtMs(items.reduce((a, x) => a + (x.cache_hit ? 0 : x.latency_ms), 0))]].map(([k, v]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>
-      <div class="acts">${REPLAY ? '' : `<button class="btn" id="uOnly">Filter Usage to this run</button>`}${syn ? '<span class="note">Synthetic run: no recorded events or Live run view.</span>' : REPLAY ? '' : `<a class="btn" href="/?run=${esc(runId)}">Open in Live run</a>`}</div>
+      <div class="acts"><button class="btn" id="uOnly">Filter Usage to this run</button>${syn ? '<span class="note">Synthetic run: no recorded events or Live run view.</span>' : REPLAY ? (runId === REC.run.run_id ? `<button class="btn" id="uLive">Open in Live run replay</button>` : '') : `<a class="btn" href="/?run=${esc(runId)}">Open in Live run</a>`}</div>
       ${callsTable(items, false)}
     </div>`;
   d.classList.add('open');
   $('#uX').onclick = () => d.classList.remove('open');
   const o = $('#uOnly'); if (o) o.onclick = () => { us.run = runId; us.page = 1; d.classList.remove('open'); loadUsage(); };
+  const lv = $('#uLive'); if (lv) lv.onclick = () => { d.classList.remove('open'); document.querySelector('.tab[data-v="live"]').click(); };
 }
 async function loadFacets(){
   const key = uq({}).replace(/&?(model|agent|run)=[^&]*/g, '');
   if (key === us.facetsKey) return; us.facetsKey = key;
   const p = new URLSearchParams(key);
-  const fc = await (await fetch('/api/usage/facets?' + p)).json();
+  const fc = await uapi('facets', p);
   const fill = (sel, all, opts, cur) => { $(sel).innerHTML = `<option value="">${all}</option>` + opts.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join(''); };
   fill('#uModel', 'All models', fc.models.map(m => [m.model, `${m.model} · ${PROV_NAMES[m.provider] || m.provider}`]), us.model);
   fill('#uAgent', 'All agents', fc.agents.map(a => [a, agentName(a)]), us.agent);
@@ -498,9 +615,26 @@ function initUsage(){
   [['#uModel', 'model'], ['#uAgent', 'agent'], ['#uRun', 'run']].forEach(([s, k]) => $(s).onchange = () => { us[k] = $(s).value; us.page = 1; loadUsage(); });
   $('#uSynSw').onclick = () => { us.synthetic = !us.synthetic; $('#uSynSw').classList.toggle('on', us.synthetic); us.page = 1; us.facetsKey = ''; loadUsage(); };
   window.addEventListener('resize', () => { if ($('#v-usage').classList.contains('on')) loadUsage(); });
+  $('#uCsv').addEventListener('click', async e => {   // replay: build the CSV in the browser (same columns as /api/usage/calls.csv)
+    if (!REPLAY) return;
+    e.preventDefault(); if (!UL.today) return;
+    const {name, text} = await uapi('calls.csv', new URLSearchParams(uq()));
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type: 'text/csv;charset=utf-8'})); a.download = name;
+    document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    toast('CSV exported: ' + name);
+  });
+}
+// Replay: anchor the Usage tab at the recorded run's IST day; default view = last 30 days with the synthetic sample (if exported) on.
+function initReplayUsage(){
+  if (!UL.init()) return;
+  us.range = '30d'; us.synthetic = true; us.facetsKey = '';
+  document.querySelectorAll('#uRange button').forEach(x => x.classList.toggle('on', x.dataset.r === '30d'));
+  $('#uSynSw').classList.add('on');
+  $('#uTo').value = UL.today; $('#uFrom').value = UL.addDays(UL.today, -13);
+  const td = document.querySelector('#uRange button[data-r="today"]'); if (td) td.title = 'Recorded run day (' + UL.today + ' IST): the replay is a static snapshot';
 }
 initUsage();
-window.__usage = us;
+window.__usage = us; window.__ul = UL; Object.defineProperty(window, "__rec", {get: () => REC});
 
 // ------------------------------------------------ replay ------------------------------------------------
 const rp = {events: [], i: 0, speed: 1, vt: 0, last: 0, timer: null};
@@ -535,16 +669,17 @@ async function initReplay(){
   banner.className = 'replay-banner';
   banner.innerHTML = `<b>Replay of a recorded run</b> · run ${esc(REC.run.run_id.slice(0, 8))} · ${esc(REC.provider || '')} · ${Math.round(REC.duration_seconds || 0)} s recorded · no backend: actions are disabled, links go to the real PRs`;
   document.querySelector('.runbar').before(banner);
+  initReplayUsage();
   loadFindings();
   replayStart();
 }
 
 reset();
 (async () => {
-  if (REPLAY) { await initReplay(); return; }
+  const tabFromQuery = () => { const tab = new URLSearchParams(location.search).get('tab'); const el = tab && document.querySelector(`.tab[data-v="${tab}"]`); if (el) el.click(); };
+  if (REPLAY) { await initReplay(); tabFromQuery(); return; }
   try { const c = await (await fetch('/api/controls')).json(); killUi(c.kill_switch); $('#cfgLabel').textContent = 'config #' + c.config.split('#')[1] + ' · synthetic data'; } catch {}
-  const tab = new URLSearchParams(location.search).get('tab');
-  if (tab){ const el = document.querySelector(`.tab[data-v="${tab}"]`); if (el) el.click(); }
+  tabFromQuery();
   const id = new URLSearchParams(location.search).get('run');
   if (id) connect(id);
   else { const r = await fetch('/api/runs/latest'); if (r.ok){ const j = await r.json(); connect(j.run_id); } }
