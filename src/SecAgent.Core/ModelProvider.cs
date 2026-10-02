@@ -109,6 +109,7 @@ public sealed class ProviderSection
     public string? StrongModel { get; set; }
     public string? FallbackModel { get; set; }
     public int? ContextWindow { get; set; }
+    public int? RunTokenBudget { get; set; }   // hosted reasoning models spend more tokens per call than the local default budget allows
     public int? OutputReserveTokens { get; set; }
     public int? MaxConcurrentCalls { get; set; }
     public int? RequestTimeoutSeconds { get; set; }

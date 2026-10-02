@@ -91,15 +91,22 @@ public class GoldenTests(ITestOutputHelper output)
     [Fact]
     public void D09_every_model_call_has_a_context_pack_and_routing_decision()
     {
+        // Every completed run (including idempotent re-runs with zero model calls) must satisfy D-09; at least one must have made model calls.
         var s = TestEnv.Store();
-        var run = LatestCompletedRun(s);
-        var routes = s.RoutingForRun(run.RunId);
-        var packs = s.PacksForRun(run.RunId).Select(p => (Guid)p.context_pack_id).ToHashSet();
-        Assert.NotEmpty(routes);
-        foreach (var r in routes) Assert.Contains((Guid)r.context_pack_id, packs);
-        var calls = s.Events(run.RunId).Count(e => e.Contains("\"name\":\"model.call\"") && e.Contains("\"state\":\"running\""));
-        output.WriteLine($"run {run.RunId}: {routes.Count} routing decisions, {packs.Count} packs, {calls} model.call events");
-        Assert.True(routes.Count >= calls, $"{calls} model calls but only {routes.Count} routing decisions");
+        var runs = s.Runs(50).Where(r => r.Status is "awaiting_human_review" or "review_recorded").ToList();
+        Assert.NotEmpty(runs);
+        var withCalls = 0;
+        foreach (var run in runs)
+        {
+            var routes = s.RoutingForRun(run.RunId);
+            var packs = s.PacksForRun(run.RunId).Select(p => (Guid)p.context_pack_id).ToHashSet();
+            foreach (var r in routes) Assert.Contains((Guid)r.context_pack_id, packs);
+            var calls = s.Events(run.RunId).Count(e => e.Contains("\"name\":\"model.call\"") && e.Contains("\"state\":\"running\""));
+            output.WriteLine($"run {run.RunId}: {routes.Count} routing decisions, {packs.Count} packs, {calls} model.call events");
+            Assert.True(routes.Count >= calls, $"{calls} model calls but only {routes.Count} routing decisions");
+            if (routes.Count > 0) withCalls++;
+        }
+        Assert.True(withCalls > 0, "no completed run made model calls");
     }
 
     static string Git(string dir, params string[] args)

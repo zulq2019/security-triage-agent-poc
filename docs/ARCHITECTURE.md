@@ -30,7 +30,7 @@ GitHub PR ──► Scanners (gitleaks, trivy, semgrep, binary check) on head + 
 | Concern | Implementation (POC) | Pilot on Azure |
 |---|---|---|
 | Agent runtime / workflow | Microsoft Agent Framework 1.23.0 (`Microsoft.Agents.AI`, `.Workflows`, GA). Typed executors, conditional edges, `RequestPort` for human review, `FileSystemJsonCheckpointStore` | Same code; durable checkpoints in Blob / Cosmos DB; host in Azure Container Apps (jobs for scans, app for dashboard) |
-| Model calls | `ChatClientAgent` over the OpenAI-compatible client → local Ollama (`qwen2.5:3b`, `qwen2.5-coder:7b`, `qwen2.5-coder:3b`) | Azure OpenAI deployments behind the APIM AI gateway (`rules/gateway/models.yaml` endpoint/deployments only, no code change) |
+| Model calls | `ChatClientAgent` over the OpenAI-compatible client → local Ollama (`qwen2.5:3b`, `qwen2.5-coder:7b`, `qwen2.5-coder:3b`) | Azure OpenAI deployments behind the APIM AI gateway. Provider switch `ModelProvider` in appsettings/env: `ollama` · `openai` · `azureopenai` (no code change; key only from an env var) |
 | Model gateway | `ModelGateway`: tier routing (task → tier, escalate on high severity / retry / low confidence), per-tier failover, circuit breaker, run token budget, schema validation and repair retries, a `RoutingDecision` row per call | APIM `llm-token-limit`, `llm-emit-token-metric`, backend pools |
 | Context | `ContextBuilder`: one `ContextPack` per call, with required/optional components, a token budget, trim order, masking, injection neutralisation, a content hash, and the pack stored | Same; packs in Blob (evidence container) |
 | Queue between scanners and orchestrator | In-process channel `queue.publish("findings")` | Azure Service Bus queue/topic |

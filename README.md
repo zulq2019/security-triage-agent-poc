@@ -14,9 +14,84 @@ Agents open PRs only. They have no merge rights, and no code path can merge. The
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, and [docs/PROGRESS.md](docs/PROGRESS.md) for the build log.
 
-## Run it
+## Model provider: a pure config switch
 
-Prerequisites: .NET 10 SDK, Ollama with the three models pulled, SQL Server (local), gitleaks/trivy/semgrep on `PATH`, and `gh` signed in with push access to the sample repo.
+`src/SecAgent.Dashboard/appsettings.json` → `ModelProvider` (overridable by `appsettings.Local.json`, which is git-ignored, and by env vars):
+
+| Setting | Env var | Values |
+|---|---|---|
+| `Provider` | `SECAGENT_MODEL_PROVIDER` | `ollama` (default) · `openai` · `azureopenai` |
+| `LocalProfile` (ollama only) | `SECAGENT_LOCAL_PROFILE` | `default` = qwen2.5:3b + qwen2.5-coder:7b (~10 GB RAM resident) · `3b-only` = qwen2.5-coder:3b for both tiers (~3 GB) |
+| `Providers.<p>.BaseUrl` | `SECAGENT_MODEL_BASE_URL` | e.g. `https://api.openai.com/v1`, `https://<res>.openai.azure.com/openai/v1/` |
+| `Providers.<p>.SmallModel` / `StrongModel` | `SECAGENT_SMALL_MODEL` / `SECAGENT_STRONG_MODEL` | OpenAI defaults are **placeholders** (`gpt-6-luna` / `gpt-6.1-sol`): set them to the models on your account. For Azure, use your deployment names |
+| `Providers.<p>.ApiKeyEnv` | (the key itself) | `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY`. **The key is read only from that environment variable and is never written to a file, a log or the store** |
+
+Only the provider, endpoint and models change. The routing policy (task → tier, escalation, budgets, schema validation, kill switch) stays in `rules/gateway/models.yaml`. The provider choice is part of the hashed config snapshot that every run records. Hosted providers default to `MaxConcurrentCalls: 4`, no temperature/seed (reasoning-family models reject them), a 4096-token output reserve and a 250k-token run budget.
+
+## Windows laptop (16 GB) with the OpenAI API
+
+> Written for Windows 10/11 + PowerShell. The code is cross-platform (.NET 10; the tool lookup handles `PATHEXT`; paths are normalised so fingerprints match across OSes), but this POC was built and run on Linux. A Windows run has **not** been tested yet.
+
+1. **Tools** (PowerShell):
+   ```powershell
+   winget install Microsoft.DotNet.SDK.10
+   winget install Git.Git
+   winget install GitHub.cli
+   winget install --id Gitleaks.Gitleaks -e
+   winget install --id AquaSecurity.Trivy -e
+   winget install Python.Python.3.12          # then, in a NEW terminal:
+   python -m pip install semgrep              # semgrep has no winget package; native Windows support is recent. WSL is the fallback
+   gh auth login                              # GitHub.com → HTTPS → browser; needs push + PR rights on the sample repo
+   gitleaks version; trivy --version; semgrep --version; dotnet --version
+   ```
+   Run `trivy fs --download-db-only` once so the first scan doesn't stall on the DB download.
+2. **SQL Server**, either:
+   - **LocalDB** (lightest): install *SQL Server Express LocalDB* (SQL Server Express installer → "Download Media" → LocalDB, or the Visual Studio Installer), plus `winget install Microsoft.Sqlcmd`, then
+     ```powershell
+     sqllocaldb start MSSQLLocalDB
+     sqlcmd -S "(localdb)\MSSQLLocalDB" -Q "CREATE DATABASE SecAgent"
+     $sql = 'Server=(localdb)\MSSQLLocalDB;Database=SecAgent;Integrated Security=true;TrustServerCertificate=true'
+     ```
+   - **Docker Desktop**:
+     ```powershell
+     docker run -d --name secagent-sql -m 2g -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=<StrongLocalPassw0rd!>" -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+     docker exec secagent-sql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "<StrongLocalPassw0rd!>" -C -Q "CREATE DATABASE SecAgent"
+     $sql = 'Server=localhost,1433;Database=SecAgent;User Id=sa;Password=<StrongLocalPassw0rd!>;TrustServerCertificate=true'
+     ```
+3. **Secrets in environment variables** (user scope, persisted; open a new terminal afterwards). Nothing goes into the repo:
+   ```powershell
+   [Environment]::SetEnvironmentVariable('OPENAI_API_KEY', '<your key>', 'User')
+   [Environment]::SetEnvironmentVariable('SECAGENT_SQL', $sql, 'User')
+   [Environment]::SetEnvironmentVariable('SECAGENT_HMAC_KEY', [Convert]::ToBase64String([byte[]](1..32 | % { Get-Random -Max 256 })), 'User')
+   [Environment]::SetEnvironmentVariable('SECAGENT_MODEL_PROVIDER', 'openai', 'User')
+   # optional: pick models without editing files
+   [Environment]::SetEnvironmentVariable('SECAGENT_SMALL_MODEL', '<small model>', 'User')
+   [Environment]::SetEnvironmentVariable('SECAGENT_STRONG_MODEL', '<strong model>', 'User')
+   ```
+   For the current session only, use `$env:OPENAI_API_KEY = '<your key>'`. Alternatively, put the non-OpenAI values in `%USERPROFILE%\.secagent\secagent.env` (`KEY=value` lines), which the app loads at startup.
+4. **Build and run** (from the repo root):
+   ```powershell
+   dotnet build SecAgent.slnx
+   dotnet src\SecAgent.Dashboard\bin\Debug\net10.0\secagent.dll reset-db
+   dotnet src\SecAgent.Dashboard\bin\Debug\net10.0\secagent.dll serve --port 8795    # http://localhost:8795 → Run on PR #1
+   dotnet test tests\SecAgent.Tests --filter "Category!=Golden"
+   ```
+   Fix PRs that already exist on the sample repo are found and **reused** (no duplicates). Expect "reused" for those groups.
+5. **Local models on the laptop instead** (no API key): install Ollama, `ollama pull qwen2.5-coder:3b` and `ollama pull qwen2.5:3b`, then set `SECAGENT_MODEL_PROVIDER=ollama` and `SECAGENT_LOCAL_PROFILE=3b-only`. The `default` local profile (7b) needs ~10 GB for models alone, which is too much next to SQL Server, the scanners and `dotnet test` on 16 GB.
+
+## Open in Cursor or Claude Code
+
+- **Cursor:** `git clone https://github.com/zulq2019/security-triage-agent-poc && cd security-triage-agent-poc && git checkout feature/slice-1-tracer-bullet && cursor .` (or File → Open Folder). Install the C# Dev Kit extension when prompted; open `SecAgent.slnx`.
+- **Claude Code:** in the repo root run `claude`. `CLAUDE.md` points at `AGENTS.md` (build/test commands, layout and the guardrails an assistant must not weaken).
+- Both tools inherit your shell environment, so start them from a terminal where `OPENAI_API_KEY` / `SECAGENT_SQL` are set (or set them at user scope as above).
+
+## Replay a recorded run (no backend)
+
+`replay-static/` holds a static build of the clean run (`index.html` + `run.json` + `run.js` + `assets/app.js`). Open `replay-static/index.html` in a browser (works from `file://`) or serve the folder with any static server. The dashboard plays back the real event stream with its recorded timings, with 1×/2× speed and a Replay button, and is marked "Replay of a recorded run". Rebuild it from any run with `scripts/build-replay.sh [run-id]` (uses `secagent export`, which refuses to write if a secret pattern is found). It is not deployed anywhere.
+
+## Run it (Linux / this box)
+
+Prerequisites: .NET 10 SDK, Ollama with the models pulled (or a hosted provider, see above), SQL Server (local), gitleaks/trivy/semgrep on `PATH`, and `gh` signed in with push access to the sample repo.
 
 ```bash
 # one-time: local secrets file (never committed)

@@ -175,7 +175,9 @@ public sealed class ConfigSnapshot
         var routing = Y<RoutingConfig>("routing/routing.yaml");
         if (provider != null)
         {
-            provider.ApplyTo(gateway);   // provider switch is part of the hashed snapshot (never the key itself)
+            provider.ApplyTo(gateway);   // provider switch
+            if (provider.Active.RunTokenBudget is int rtb && provider.Provider != "ollama") foreach (var b in policies.Budgets.Values) b.Tokens = rtb;
+            // (continued) provider switch is part of the hashed snapshot (never the key itself)
             all.Append("provider\n").Append(JsonSerializer.Serialize(gateway.Tiers)).Append(gateway.Endpoint).Append(gateway.ApiKeyEnv);
         }
         var hash = Convert.ToHexStringLower(sha.ComputeHash(Encoding.UTF8.GetBytes(all.ToString())));

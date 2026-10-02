@@ -48,6 +48,7 @@ public class ProviderTests
         Assert.Equal("", c.Gateway.HealthUrl);
         Assert.False(c.Gateway.SendTemperature);
         Assert.Equal("my-strong-model", c.Gateway.Tiers["strong"][0].Model);
+        Assert.Equal(250000, c.Policies.Budgets["pr"].Tokens);
         Assert.NotEqual(local.Hash, c.Hash);                         // provider is part of the hashed config snapshot
         Assert.Equal(local.Gateway.QualityRules.HighIfSeverity, c.Gateway.QualityRules.HighIfSeverity); // routing policy unchanged
     }
