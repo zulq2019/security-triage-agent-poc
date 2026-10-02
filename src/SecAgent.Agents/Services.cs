@@ -31,6 +31,7 @@ public sealed class AgentServices
         var cfg = ConfigSnapshot.Load(Path.Combine(repoRoot, "rules"), provider);
         var store = new SqlStore(sqlConnection);
         store.EnsureSchema(Path.Combine(repoRoot, "db", "schema.sql"));
+        store.EnsureMigrations(Path.Combine(repoRoot, "db", "migrations"));   // 002: ModelUsage (+ backfill from RoutingDecision)
         var masker = new SecretMasker();
         var blob = new LocalBlobStore(Path.Combine(dataRoot, "blob"));
         var kill = new KillSwitch(Path.Combine(dataRoot, "control"), cfg.Policies.KillSwitch);

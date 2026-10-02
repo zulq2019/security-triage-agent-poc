@@ -274,6 +274,85 @@ table.ft{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
 .tasks{padding:4px 14px 12px;display:flex;flex-direction:column;gap:6px}
 .task{font-size:12px;color:var(--ink-2);display:flex;gap:8px}
 .task b{color:var(--amber);font-weight:650;font-size:10.5px;text-transform:uppercase;white-space:nowrap}
+/* ---------- usage tab ---------- */
+#v-usage.on{display:block;overflow:auto;padding:16px 20px 24px}
+.u-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px}
+.u-bar .sp{flex:1}
+.u-bar select,.u-bar input[type=date]{height:32px;border:1px solid var(--line);border-radius:9px;padding:0 9px;font:inherit;font-size:12.5px;color:var(--navy);background:#fff;max-width:200px}
+.u-bar .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+.u-sub{display:flex;align-items:center;gap:10px;margin:-4px 2px 12px;font-size:12px;color:var(--ink-3)}
+.u-sub b{color:var(--ink-2);font-weight:600}
+.syn-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;color:#8a5a00;background:#fff4dc;border:1px solid #f1d29a;border-radius:999px;padding:3px 10px}
+.syn-badge i{width:7px;height:7px;border-radius:50%;background:#e19a1c}
+.u-tog{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);font-weight:550;cursor:pointer;user-select:none}
+.switch.sm{width:34px;height:20px}.switch.sm::after{width:14px;height:14px}.switch.sm.on{background:var(--teal)}.switch.sm.on::after{left:17px}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:13px 15px 12px;min-width:0}
+.kpi .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+.kpi .v{font-size:24px;font-weight:700;color:var(--navy);letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:4px;line-height:1.15}
+.kpi .s{font-size:11.5px;color:var(--ink-3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi .s b{color:var(--ink-2);font-weight:600}
+.kpi.warn .v{color:var(--orange)}
+.tag{display:inline-block;font-size:10px;font-weight:650;letter-spacing:.03em;padding:1px 6px;border-radius:5px;white-space:nowrap;vertical-align:1px}
+.tag.local{background:var(--green-50);color:var(--green)}
+.tag.ph{background:var(--amber-50);color:var(--amber)}
+.tag.syn{background:#fff4dc;color:#8a5a00}
+.tag.prov{background:#eef2f4;color:var(--ink-2)}
+.tag.cache{background:var(--blue-50);color:var(--blue)}
+.u-card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:14px;min-width:0}
+.u-card .card-h{padding:12px 16px 10px}
+.u-card .body{padding:12px 16px 14px}
+.u-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.u-grid > .u-card{margin-bottom:14px}
+.legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink-2);align-items:center}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.legend i.ln{height:3px;border-radius:2px;width:14px;vertical-align:2px}
+.chart{width:100%;height:250px;display:block}
+.chart text{font-family:inherit;font-size:10.5px;fill:var(--ink-3)}
+.chart .bar:hover{opacity:.85}
+.chart .hov{fill:transparent}.chart .hov:hover{fill:rgba(18,48,58,.04)}
+table.ut{width:100%;border-collapse:collapse}
+.ut th{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+.ut th:first-child,.ut td:first-child,.ut th.l{text-align:left}
+.ut td{padding:8px 10px;border-bottom:1px solid var(--line-2);font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ut tr:last-child td{border-bottom:0}
+.ut td.l{text-align:left}
+.ut td.m{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.ut .nm{font-weight:600;color:var(--ink)}
+.pct{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
+.pct .pb{width:44px;height:6px;border-radius:4px;background:#edf1f3;overflow:hidden}
+.pct .pb i{display:block;height:100%;background:linear-gradient(90deg,#0f7c7c,#2aa7a3);border-radius:4px}
+.oc{font-size:10.5px;font-weight:650;padding:1px 7px;border-radius:5px;white-space:nowrap}
+.oc.ok{background:var(--green-50);color:var(--green)} .oc.schema_retry,.oc.fallback{background:var(--amber-50);color:var(--amber)}
+.oc.error,.oc.timeout{background:var(--red-50);color:var(--red)}
+.runlink{color:var(--teal);font-family:var(--mono);font-size:11.5px;font-weight:600;cursor:pointer;text-decoration:none;border-bottom:1px dashed var(--teal-100)}
+.runlink:hover{border-bottom-color:var(--teal)}
+.pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--line-2);font-size:12px;color:var(--ink-3)}
+.pager .btn{height:28px;padding:0 10px}
+.burn{display:flex;flex-direction:column;gap:14px}
+.burn .row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px}
+.burn .row b{font-weight:650;color:var(--navy);font-variant-numeric:tabular-nums}
+.burn .meter{height:8px;margin-top:6px}
+.burn .meter i.hot{background:linear-gradient(90deg,#d4570f,#e19a1c)}
+.burn .note{margin-top:4px;font-size:11.5px}
+.runbars{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.runbars .rb{display:grid;grid-template-columns:150px 1fr 54px;gap:8px;align-items:center;font-size:11.5px;color:var(--ink-2)}
+.runbars .rb .t{height:6px;border-radius:4px;background:#edf1f3;overflow:hidden;position:relative}
+.runbars .rb .t i{display:block;height:100%;background:#2aa7a3;border-radius:4px}
+.runbars .rb .t i.syn{background:#e9c46a}
+.runbars .rb span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.u-empty{color:var(--ink-4);text-align:center;padding:28px 0;font-size:12.5px}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:720px;background:#fff;border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(18,48,58,.12);z-index:8;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.drawer .dh{padding:16px 18px 12px;border-bottom:1px solid var(--line-2);display:flex;gap:10px;align-items:flex-start}
+.drawer .dh h3{margin:0;font-size:15px;color:var(--navy);font-weight:650}
+.drawer .dh .sub{font-size:12px;color:var(--ink-3);margin-top:3px}
+.drawer .db{flex:1;overflow:auto;padding:14px 18px}
+.drawer .x{margin-left:auto;border:0;background:#f1f4f6;border-radius:8px;width:28px;height:28px;cursor:pointer;color:var(--ink-2)}
+.drawer .kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.drawer .kpi{padding:9px 11px;box-shadow:none}
+.drawer .kpi .v{font-size:18px}
+.drawer .acts{display:flex;gap:8px;margin:2px 0 14px}
 </style>
 </head>
 <body>
@@ -287,6 +366,7 @@ table.ft{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
       <div class="tab active" data-v="live">Live run</div>
       <div class="tab" data-v="findings">Findings <span class="ct" id="ctFind">0</span></div>
       <div class="tab" data-v="backlog">Backlog <span class="ct" id="ctBack">0</span></div>
+      <div class="tab" data-v="usage">Usage</div>
       <div class="tab" data-v="controls">Controls</div>
     </nav>
     <div class="sp"></div>
@@ -376,6 +456,40 @@ table.ft{width:100%;border-collapse:collapse;background:#fff;border:1px solid va
 
   <section class="view" id="v-findings"><table class="ft" id="ftable"></table></section>
   <section class="view" id="v-backlog"></section>
+  <section class="view" id="v-usage">
+    <div class="panel u-bar">
+      <span class="lbl">Range</span>
+      <div class="seg" id="uRange"><button data-r="today">Today</button><button data-r="7d" class="on">7 days</button><button data-r="30d">30 days</button><button data-r="custom">Custom</button></div>
+      <span id="uCustom" style="display:none"><input type="date" id="uFrom" aria-label="From (IST)"> – <input type="date" id="uTo" aria-label="To (IST)"></span>
+      <select id="uModel" aria-label="Model"><option value="">All models</option></select>
+      <select id="uAgent" aria-label="Agent"><option value="">All agents</option></select>
+      <select id="uRun" aria-label="Run"><option value="">All runs</option></select>
+      <span class="sp"></span>
+      <span class="syn-badge" id="uSynBadge" style="display:none"><i></i>Synthetic sample data in view</span>
+      <label class="u-tog" id="uSynTog"><button class="switch sm on" id="uSynSw" aria-label="Show synthetic sample data"></button>Show synthetic</label>
+      <a class="btn" id="uCsv" href="#" download>Export CSV</a>
+    </div>
+    <div class="u-sub" id="uSub"></div>
+    <div class="kpis" id="uKpis"></div>
+    <div class="u-card">
+      <div class="card-h"><h2>Daily tokens &amp; cost</h2><div class="legend"><span><i style="background:#0f7c7c"></i>Input tokens</span><span><i style="background:#9fd8d4"></i>Output tokens</span><span id="uCostLeg"><i class="ln" style="background:#c77700"></i>Cost (USD)</span></div></div>
+      <div class="body"><div id="uChart"></div><div class="note" id="uChartNote"></div></div>
+    </div>
+    <div class="u-grid">
+      <div class="u-card"><div class="card-h"><h2>By model</h2><span class="meta" id="uModelMeta"></span></div><div id="uByModel"></div></div>
+      <div class="u-card"><div class="card-h"><h2>By agent</h2><span class="meta" id="uAgentMeta"></span></div><div id="uByAgent"></div></div>
+    </div>
+    <div class="u-grid" style="grid-template-columns:minmax(0,1fr) minmax(0,2fr)">
+      <div class="u-card"><div class="card-h"><h2>Budget burn</h2><span class="meta">vs policies.yaml</span></div><div class="body burn" id="uBurn"></div></div>
+      <div class="u-card"><div class="card-h"><h2>By task</h2><span class="meta">triage · fix · verify · summarise</span></div><div id="uByTask"></div></div>
+    </div>
+    <div class="u-card">
+      <div class="card-h"><h2>Recent model calls</h2><span class="meta">times in IST · click a run to drill down</span></div>
+      <div id="uCalls"></div>
+      <div class="pager" id="uPager"></div>
+    </div>
+  </section>
+  <aside class="drawer" id="uDrawer" aria-label="Run usage"></aside>
   <section class="view" id="v-controls"></section>
 </div>
 <div class="toast" id="toast"></div>

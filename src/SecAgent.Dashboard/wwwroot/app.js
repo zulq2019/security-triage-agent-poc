@@ -263,6 +263,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + t.dataset.v));
   if (t.dataset.v === 'findings' || t.dataset.v === 'backlog') loadFindings();
   if (t.dataset.v === 'controls') loadControls();
+  if (t.dataset.v === 'usage') loadUsage();
 });
 async function loadFindings(){
   const fs = await getJson('/api/findings');
@@ -288,6 +289,196 @@ async function loadControls(){
     pre('Budgets · thresholds · retries · authority', {budgets:c.budgets, thresholds:c.thresholds, retries:c.retries, authority:c.authority}) +
     pre('Plug-in registry (routing.yaml)', c.routes) + pre('Model tiers (gateway)', c.tiers) + pre('Tool allow-lists (there is no merge tool)', c.tool_allow_lists);
 }
+
+// ------------------------------------------------ usage tab ------------------------------------------------
+// Live: /api/usage/* (filters applied server-side). Replay: precomputed views from run.json (REC.usage), filters disabled.
+const AGENT_NAMES = {'triage-agent':'Triage', library:'Library fixer', secrets:'Secrets fixer', unsafe_code:'Unsafe code fixer', binary_licence:'Binary/Licence fixer', verifier:'Verifier'};
+const PROV_NAMES = {ollama:'Ollama · local', openai:'OpenAI', azureopenai:'Azure OpenAI', mixed:'mixed'};
+const us = {range:'7d', from:null, to:null, model:'', agent:'', run:'', synthetic:true, page:1, size:25, facetsKey:''};
+const fmtN = n => { n = +n || 0; const a = Math.abs(n); return a >= 1e6 ? (n/1e6).toFixed(2) + 'M' : a >= 1e4 ? (n/1e3).toFixed(1) + 'k' : a >= 1e3 ? (n/1e3).toFixed(2) + 'k' : String(Math.round(n)); };
+const fmtUsd = c => { c = +c || 0; return c === 0 ? '$0' : c >= 100 ? '$' + c.toFixed(0) : c >= 1 ? '$' + c.toFixed(2) : '$' + c.toFixed(4); };
+const fmtMs = ms => { ms = +ms || 0; return ms >= 60000 ? (ms/60000).toFixed(1) + ' min' : ms >= 1000 ? (ms/1000).toFixed(1) + ' s' : Math.round(ms) + ' ms'; };
+const pctS = x => (x * 100).toFixed(1) + '%';
+const utcDate = s => new Date(/Z$|[+-]\d\d:\d\d$/.test(s) ? s : s + 'Z');
+const istDay = d => new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', day:'2-digit', month:'short'}).format(d);
+const istTime = s => new Intl.DateTimeFormat('en-GB', {timeZone:'Asia/Kolkata', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}).format(utcDate(s));
+const agentName = a => AGENT_NAMES[a] || a;
+const costCell = (cost, local, ph) => local ? `$0 <span class="tag local">local model</span>` : fmtUsd(cost) + (ph ? ' <span class="tag ph" title="priced from the placeholder price book in rules/gateway/models.yaml">placeholder price</span>' : '');
+function uq(extra){
+  const p = new URLSearchParams();
+  if (us.range === 'custom' && us.from && us.to){ p.set('from', us.from); p.set('to', us.to); } else p.set('range', us.range === 'custom' ? '7d' : us.range);
+  if (us.model) p.set('model', us.model); if (us.agent) p.set('agent', us.agent); if (us.run) p.set('run', us.run);
+  if (!us.synthetic) p.set('synthetic', 'exclude');
+  for (const [k, v] of Object.entries(extra || {})) p.set(k, v);
+  return p.toString();
+}
+const uget = async (path, extra) => (await fetch(`/api/usage/${path}?${uq(extra)}`)).json();
+
+async function loadUsage(){
+  let sum, day, model, agent, task, calls, budget;
+  if (REPLAY){
+    const U = REC && REC.usage;
+    if (!U){ $('#uKpis').innerHTML = '<div class="u-empty" style="grid-column:1/-1">This replay was exported without usage data.</div>'; return; }
+    sum = {filter: U.filter, totals: U.totals}; day = U.by.day; model = U.by.model; agent = U.by.agent; task = U.by.task; budget = U.budget;
+    const items = U.calls.slice().sort((a, b) => utcDate(b.ts_utc) - utcDate(a.ts_utc));
+    calls = {total: items.length, page: us.page, page_size: us.size, pages: Math.ceil(items.length / us.size), items: items.slice((us.page - 1) * us.size, us.page * us.size)};
+    $('.u-bar').innerHTML = `<span class="lbl">Replay</span><span class="note">Usage of this recorded run only (real calls, no synthetic data) · filters need the live backend</span>`;
+  } else {
+    [sum, day, model, agent, task, calls, budget] = await Promise.all([uget('summary'), uget('summary', {groupBy:'day'}), uget('summary', {groupBy:'model'}),
+      uget('summary', {groupBy:'agent'}), uget('summary', {groupBy:'task'}), uget('calls', {page: us.page, pageSize: us.size}), uget('budget')]);
+    day = day.groups; model = model.groups; agent = agent.groups; task = task.groups;
+    loadFacets();
+    $('#uCsv').href = '/api/usage/calls.csv?' + uq();
+  }
+  const t = sum.totals, f = sum.filter;
+  { const sb = $('#uSynBadge'); if (sb) sb.style.display = t.synthetic_rows > 0 ? '' : 'none'; }
+  $('#uSub').innerHTML = `<span><b>${esc(f.from)}</b> → <b>${esc(f.to)}</b> IST · ${f.days} day${f.days > 1 ? 's' : ''}</span><span>·</span><span>${t.runs} run${t.runs === 1 ? '' : 's'} · ${fmtN(t.real_rows)} real row${t.real_rows === 1 ? '' : 's'}${t.synthetic_rows ? ` · <b style="color:#8a5a00">${fmtN(t.synthetic_rows)} synthetic</b>` : ''}</span>` +
+    (us.model || us.agent || us.run ? `<span>·</span><span>filtered: ${[us.model && 'model ' + esc(us.model), us.agent && 'agent ' + esc(agentName(us.agent)), us.run && 'run ' + esc(us.run.slice(0, 8))].filter(Boolean).join(', ')}</span>` : '');
+  const errRate = t.error_rate, retRate = t.retry_rate;
+  $('#uKpis').innerHTML = [
+    ['Model calls', fmtN(t.calls), t.cache_hits ? `<b>${fmtN(t.cache_hits)}</b> cache hits (no tokens)` : `${t.runs} run${t.runs === 1 ? '' : 's'} in range`],
+    ['Input tokens', fmtN(t.input_tokens), `${t.total_tokens ? pctS(t.input_tokens / t.total_tokens) : '0%'} of all tokens`],
+    ['Output tokens', fmtN(t.output_tokens), `${t.calls ? fmtN(t.output_tokens / t.calls) : 0} per call`],
+    ['Cost', t.all_local ? '$0' : fmtUsd(t.cost), t.all_local ? '<span class="tag local">local models</span> no API spend' : t.has_placeholder_prices ? '<span class="tag ph">incl. placeholder prices</span>' : 'from configured prices'],
+    ['Avg latency', fmtMs(t.avg_latency_ms), `p95 <b>${fmtMs(t.p95_latency_ms)}</b> per call`],
+    ['Error / retry rate', `${pctS(errRate)} <span style="font-size:15px;color:var(--ink-3);font-weight:600">/ ${pctS(retRate)}</span>`, `${t.errors} errors · ${t.timeouts} timeouts · ${t.retries} JSON retries · ${t.fallbacks} fallbacks`, errRate > 0.05],
+  ].map(([k, v, s, warn]) => `<div class="kpi${warn ? ' warn' : ''}"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+  renderChart(day, t);
+  $('#uByModel').innerHTML = groupTable(model, 'Model', g => `<span class="nm">${esc(g.key)}</span> <span class="tag prov">${esc(PROV_NAMES[g.provider] || g.provider)}</span>${g.synthetic_rows ? ' <span class="tag syn">synthetic</span>' : ''}`);
+  $('#uByAgent').innerHTML = groupTable(agent, 'Agent', g => `<span class="nm">${esc(agentName(g.key))}</span>${g.synthetic_rows === g.calls + g.cache_hits && g.synthetic_rows ? ' <span class="tag syn">synthetic</span>' : ''}`);
+  $('#uByTask').innerHTML = groupTable(task, 'Task', g => `<span class="nm">${esc(g.key)}</span>`);
+  $('#uModelMeta').textContent = `${model.length} model${model.length === 1 ? '' : 's'}`; $('#uAgentMeta').textContent = `${agent.length} agent${agent.length === 1 ? '' : 's'}`;
+  renderBurn(budget);
+  renderCalls(calls);
+}
+function groupTable(groups, label, nameFn){
+  if (!groups.length) return '<div class="u-empty">No model calls in this range</div>';
+  return `<table class="ut"><tr><th>${label}</th><th>Calls</th><th>Input</th><th>Output</th><th>Cost</th><th>Avg latency</th><th>% of tokens</th></tr>` + groups.map(g => `<tr>
+    <td class="l">${nameFn(g)}</td><td>${fmtN(g.calls)}${g.cache_hits ? ` <span class="tag cache" title="decisions reused without a model call">+${g.cache_hits} cached</span>` : ''}</td><td>${fmtN(g.input_tokens)}</td><td>${fmtN(g.output_tokens)}</td>
+    <td>${costCell(g.cost, g.local, g.placeholder)}</td><td>${fmtMs(g.avg_latency_ms)}</td>
+    <td><span class="pct"><span class="pb"><i style="width:${Math.min(100, g.pct_tokens)}%"></i></span>${g.pct_tokens.toFixed(1)}%</span></td></tr>`).join('') + '</table>';
+}
+function renderChart(days, t){
+  const el = $('#uChart'), W = Math.max(600, el.clientWidth || 1100), H = 250, L = 52, R = t.all_local ? 16 : 58, T = 12, B = 28;
+  const iw = W - L - R, ih = H - T - B, n = days.length || 1;
+  const maxTok = Math.max(1, ...days.map(d => d.input_tokens + d.output_tokens)), maxCost = Math.max(...days.map(d => d.cost), 0);
+  const nice = v => { const p = Math.pow(10, Math.floor(Math.log10(v))); return [1, 2, 2.5, 5, 10].map(m => m * p).find(x => x >= v); };
+  const yMax = nice(maxTok * 1.08), cMax = maxCost > 0 ? nice(maxCost * 1.08) : 1;
+  const bw = iw / n, barW = Math.max(2, Math.min(34, bw * 0.62));
+  const y = v => T + ih - v / yMax * ih, yc = v => T + ih - v / cMax * ih;
+  let g = '';
+  for (let i = 0; i <= 4; i++){
+    const v = yMax * i / 4, yy = y(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}" stroke="${i ? '#eef2f4' : '#dfe5e8'}"/><text x="${L - 8}" y="${yy + 3.5}" text-anchor="end">${fmtN(v)}</text>`;
+    if (!t.all_local && maxCost > 0) g += `<text x="${W - R + 8}" y="${yy + 3.5}">${fmtUsd(cMax * i / 4)}</text>`;
+  }
+  const every = Math.ceil(n / 15);
+  const pts = [];
+  days.forEach((d, i) => {
+    const cx = L + bw * i + bw / 2, x0 = cx - barW / 2, yi = y(d.input_tokens), yo = y(d.input_tokens + d.output_tokens);
+    const date = new Date(d.key + 'T00:00:00+05:30');
+    const tip = `${istDay(date)} (IST) · ${fmtN(d.calls)} calls · in ${fmtN(d.input_tokens)} · out ${fmtN(d.output_tokens)} · ${d.local ? '$0 (local)' : fmtUsd(d.cost)}${d.synthetic_rows ? ' · synthetic' : ''}`;
+    g += `<g><title>${esc(tip)}</title><rect class="hov" x="${L + bw * i}" y="${T}" width="${bw}" height="${ih}"/>` +
+      (d.input_tokens ? `<rect class="bar" x="${x0}" y="${yi}" width="${barW}" height="${T + ih - yi}" fill="#0f7c7c" rx="2"/>` : '') +
+      (d.output_tokens ? `<rect class="bar" x="${x0}" y="${yo}" width="${barW}" height="${yi - yo}" fill="#9fd8d4" rx="2"/>` : '') + '</g>';
+    if (i % every === 0 || i === n - 1) g += `<text x="${cx}" y="${H - 8}" text-anchor="middle">${istDay(date)}</text>`;
+    pts.push([cx, yc(d.cost)]);
+  });
+  const showCost = !t.all_local && maxCost > 0;
+  if (showCost && pts.length) g += `<polyline points="${pts.map(p => p.join(',')).join(' ')}" fill="none" stroke="#c77700" stroke-width="2" stroke-linejoin="round"/>` + pts.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="2.6" fill="#fff" stroke="#c77700" stroke-width="1.6"/>`).join('');
+  el.innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Daily input and output tokens with cost">${g}</svg>`;
+  $('#uCostLeg').style.display = showCost ? '' : 'none';
+  $('#uChartNote').innerHTML = !t.calls ? 'No model calls in this range.' : showCost ? (t.has_placeholder_prices ? 'Cost uses <b>placeholder prices</b> from rules/gateway/models.yaml for hosted models; local models are $0.' : '') :
+    'Cost line hidden: every call in view ran on a local Ollama model ($0).';
+}
+function meter(label, used, cap, fmt, note){
+  const pct = cap ? used / cap * 100 : 0;
+  return `<div><div class="row"><span>${label}</span><span><b>${fmt(used)}</b> / ${cap ? fmt(cap) : '–'} · ${cap ? pct.toFixed(1) + '%' : 'no budget set'}</span></div>
+    <div class="meter"><i class="${pct >= 80 ? 'hot' : ''}" style="width:${Math.min(100, pct)}%"></i></div>${note ? `<div class="note">${note}</div>` : ''}</div>`;
+}
+function renderBurn(b){
+  const m = b.month, w = b.window, r = b.runs;
+  $('#uBurn').innerHTML =
+    meter(`Tokens · ${esc(m.label)} to date`, m.tokens, m.budget_tokens, fmtN, `projected month end <b>${fmtN(m.projected_tokens)}</b> at the current rate (day ${m.days_elapsed} of ${m.days_in_month})`) +
+    meter(`Cost · ${esc(m.label)} to date`, m.cost, m.budget_cost, fmtUsd, `projected <b>${fmtUsd(m.projected_cost)}</b>${m.cost === 0 ? ' · local models only' : ''}`) +
+    meter(`Tokens · selected ${w.days} day${w.days > 1 ? 's' : ''}`, w.tokens, w.budget_tokens, fmtN, `daily budget ${fmtN(w.daily_budget_tokens)} × ${w.days}`) +
+    `<div><div class="row"><span>Per-run token cap (${fmtN(r.cap_tokens)})</span><span>avg <b>${r.avg_pct}%</b> · max <b>${r.max_pct}%</b> · ${r.over_80} over 80%</span></div>
+      <div class="runbars">${(r.items || []).slice(0, 8).map(x => `<div class="rb"><span title="${esc(x.repo || '')}">${esc((x.repo || '').split('/').pop())}${x.pr_number ? ' #' + x.pr_number : ''}</span>
+        <span class="t"><i class="${x.synthetic ? 'syn' : ''}" style="width:${Math.min(100, x.pct)}%"></i></span><span>${x.pct}%</span></div>`).join('') || '<span class="note">No runs in range</span>'}</div></div>`;
+}
+function callsTable(items, withRun){
+  if (!items.length) return '<div class="u-empty">No model calls in this range</div>';
+  return `<table class="ut"><tr><th>Time (IST)</th>${withRun ? '<th class="l">Run</th><th class="l">Repo / PR</th>' : ''}<th class="l">Agent</th><th class="l">Task</th><th class="l">Tier</th><th class="l">Model</th><th>Input</th><th>Output</th><th>Cost</th><th>Latency</th><th>Outcome</th></tr>` +
+    items.map(c => `<tr><td class="l m">${esc(istTime(c.ts_utc))}</td>` +
+      (withRun ? `<td class="l"><a class="runlink" data-run="${esc(c.run_id)}">${esc(c.run_id.slice(0, 8))}</a>${c.synthetic ? ' <span class="tag syn">synthetic</span>' : ''}</td><td class="l">${esc((c.repo || '–').split('/').pop())}${c.pr_number ? ' #' + c.pr_number : ''} <span class="note">${esc(c.mode)}</span></td>` : '') +
+      `<td class="l">${esc(agentName(c.agent_id))}</td><td class="l">${esc(c.task_purpose)}</td><td class="l"><span class="chip-m ${c.tier === 'strong' ? 'strong' : 'small'}">${esc(c.tier)}</span></td>
+      <td class="l">${esc(c.model_id)}</td><td>${c.cache_hit ? '<span class="tag cache">cache hit</span>' : fmtN(c.input_tokens)}</td><td>${c.cache_hit ? '–' : fmtN(c.output_tokens)}</td>
+      <td>${costCell(c.cost, c.provider === 'ollama', c.price_source === 'placeholder')}</td><td>${c.cache_hit ? '–' : fmtMs(c.latency_ms)}</td>
+      <td><span class="oc ${esc(c.outcome)}" title="${esc(c.outcome_detail || '')}">${esc(c.outcome.replace('_', ' '))}</span></td></tr>`).join('') + '</table>';
+}
+function renderCalls(p){
+  $('#uCalls').innerHTML = callsTable(p.items, true);
+  const a = p.total ? (p.page - 1) * p.page_size + 1 : 0, b = Math.min(p.total, p.page * p.page_size);
+  $('#uPager').innerHTML = `<span>${a}–${b} of ${fmtN(p.total)}</span><button class="btn" id="uPrev" ${p.page <= 1 ? 'disabled' : ''}>Previous</button><button class="btn" id="uNext" ${p.page >= p.pages ? 'disabled' : ''}>Next</button>`;
+  $('#uPrev').onclick = () => { us.page--; loadUsage(); };
+  $('#uNext').onclick = () => { us.page++; loadUsage(); };
+  document.querySelectorAll('#uCalls .runlink').forEach(x => x.onclick = () => openRun(x.dataset.run));
+}
+async function openRun(runId){
+  const d = $('#uDrawer');
+  let items, t;
+  if (REPLAY){ items = REC.usage.calls; t = REC.usage.totals; }
+  else {
+    const q = new URLSearchParams({range:'30d', run: runId, pageSize: 500}); if (!us.synthetic) q.set('synthetic', 'exclude');
+    // a run can be older than 30 days: widen the window to a year for the drill-down
+    q.delete('range'); const to = new Date(); const from = new Date(Date.now() - 365 * 864e5);
+    const ymd = x => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata'}).format(x);
+    q.set('from', ymd(from)); q.set('to', ymd(to));
+    const [c, s] = await Promise.all([(await fetch('/api/usage/calls?' + q)).json(), (await fetch('/api/usage/summary?' + q)).json()]);
+    items = c.items.slice().reverse(); t = s.totals;
+  }
+  const first = items[0] || {}, syn = items.some(x => x.synthetic);
+  d.innerHTML = `<div class="dh"><div><h3>Run ${esc(runId.slice(0, 8))} ${syn ? '<span class="tag syn">synthetic</span>' : ''}</h3>
+      <div class="sub">${esc(first.repo || '–')}${first.pr_number ? ' · PR #' + first.pr_number : ''} · ${esc(first.mode || '')} mode · ${first.ts_utc ? esc(istTime(first.ts_utc)) + ' IST' : ''}</div></div>
+      <button class="x" id="uX" aria-label="Close">✕</button></div>
+    <div class="db">
+      <div class="kpis">${[['Calls', fmtN(t.calls) + (t.cache_hits ? ` <span style="font-size:12px;color:var(--ink-3)">+${t.cache_hits} cached</span>` : '')], ['Tokens', fmtN(t.total_tokens)],
+        ['Cost', t.all_local ? '$0' : fmtUsd(t.cost)], ['Model time', fmtMs(items.reduce((a, x) => a + (x.cache_hit ? 0 : x.latency_ms), 0))]].map(([k, v]) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>
+      <div class="acts">${REPLAY ? '' : `<button class="btn" id="uOnly">Filter Usage to this run</button>`}${syn ? '<span class="note">Synthetic run: no recorded events or Live run view.</span>' : REPLAY ? '' : `<a class="btn" href="/?run=${esc(runId)}">Open in Live run</a>`}</div>
+      ${callsTable(items, false)}
+    </div>`;
+  d.classList.add('open');
+  $('#uX').onclick = () => d.classList.remove('open');
+  const o = $('#uOnly'); if (o) o.onclick = () => { us.run = runId; us.page = 1; d.classList.remove('open'); loadUsage(); };
+}
+async function loadFacets(){
+  const key = uq({}).replace(/&?(model|agent|run)=[^&]*/g, '');
+  if (key === us.facetsKey) return; us.facetsKey = key;
+  const p = new URLSearchParams(key);
+  const fc = await (await fetch('/api/usage/facets?' + p)).json();
+  const fill = (sel, all, opts, cur) => { $(sel).innerHTML = `<option value="">${all}</option>` + opts.map(([v, l]) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`).join(''); };
+  fill('#uModel', 'All models', fc.models.map(m => [m.model, `${m.model} · ${PROV_NAMES[m.provider] || m.provider}`]), us.model);
+  fill('#uAgent', 'All agents', fc.agents.map(a => [a, agentName(a)]), us.agent);
+  fill('#uRun', 'All runs', fc.runs.map(r => [r.run_id, `${r.run_id.slice(0, 8)} · ${(r.repo || '').split('/').pop()}${r.pr_number ? ' #' + r.pr_number : ''}${r.synthetic ? ' · synthetic' : ''}`]), us.run);
+  $('#uSynTog').style.display = fc.any_synthetic ? '' : 'none';
+}
+function initUsage(){
+  const ymd = x => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Kolkata'}).format(x);
+  $('#uTo').value = ymd(new Date()); $('#uFrom').value = ymd(new Date(Date.now() - 13 * 864e5));
+  document.querySelectorAll('#uRange button').forEach(b => b.onclick = () => {
+    us.range = b.dataset.r; us.page = 1;
+    document.querySelectorAll('#uRange button').forEach(x => x.classList.toggle('on', x === b));
+    $('#uCustom').style.display = us.range === 'custom' ? '' : 'none';
+    if (us.range === 'custom'){ us.from = $('#uFrom').value; us.to = $('#uTo').value; }
+    loadUsage();
+  });
+  ['#uFrom', '#uTo'].forEach(s => $(s).onchange = () => { us.from = $('#uFrom').value; us.to = $('#uTo').value; us.page = 1; if (us.from && us.to) loadUsage(); });
+  [['#uModel', 'model'], ['#uAgent', 'agent'], ['#uRun', 'run']].forEach(([s, k]) => $(s).onchange = () => { us[k] = $(s).value; us.page = 1; loadUsage(); });
+  $('#uSynSw').onclick = () => { us.synthetic = !us.synthetic; $('#uSynSw').classList.toggle('on', us.synthetic); us.page = 1; us.facetsKey = ''; loadUsage(); };
+  window.addEventListener('resize', () => { if ($('#v-usage').classList.contains('on')) loadUsage(); });
+}
+initUsage();
+window.__usage = us;
 
 // ------------------------------------------------ replay ------------------------------------------------
 const rp = {events: [], i: 0, speed: 1, vt: 0, last: 0, timer: null};
@@ -330,6 +521,8 @@ reset();
 (async () => {
   if (REPLAY) { await initReplay(); return; }
   try { const c = await (await fetch('/api/controls')).json(); killUi(c.kill_switch); $('#cfgLabel').textContent = 'config #' + c.config.split('#')[1] + ' · synthetic data'; } catch {}
+  const tab = new URLSearchParams(location.search).get('tab');
+  if (tab){ const el = document.querySelector(`.tab[data-v="${tab}"]`); if (el) el.click(); }
   const id = new URLSearchParams(location.search).get('run');
   if (id) connect(id);
   else { const r = await fetch('/api/runs/latest'); if (r.ok){ const j = await r.json(); connect(j.run_id); } }

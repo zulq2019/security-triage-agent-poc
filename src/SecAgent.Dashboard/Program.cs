@@ -11,6 +11,7 @@ using SecAgent.Core;
 // secagent serve [--port 8795]                         dashboard (live run via SSE) + API
 // secagent run --repo owner/name --pr N [--fresh]      CLI run (local runner; ends at "waiting for human review")
 // secagent reset-db                                    dev only: clear the local SecAgent database (demo reset)
+// secagent seed-usage [--days 30] [--seed 42] [--clear] SYNTHETIC usage rows for the Usage tab demo (flagged synthetic=1)
 // ---------------------------------------------------------------------------------------------------------------
 LocalEnv.Load();
 var repoRoot = LocalEnv.FindRepoRoot();
@@ -24,8 +25,26 @@ if (cmd == "reset-db")
 {
     var st = new SqlStore(sql);
     st.EnsureSchema(Path.Combine(repoRoot, "db", "schema.sql"));
+    st.EnsureMigrations(Path.Combine(repoRoot, "db", "migrations"));
     st.ResetAll();
     Console.WriteLine("SecAgent database cleared (local dev).");
+    return 0;
+}
+
+if (cmd == "seed-usage")
+{
+    // SYNTHETIC demo data only (scripts/seed-usage.sh). Re-seeding replaces earlier synthetic rows; real rows are never touched.
+    var st = new SqlStore(sql);
+    st.EnsureSchema(Path.Combine(repoRoot, "db", "schema.sql"));
+    st.EnsureMigrations(Path.Combine(repoRoot, "db", "migrations"));
+    var removed = st.DeleteSyntheticUsage();
+    if (args.Contains("--clear")) { Console.WriteLine($"removed {removed} synthetic usage rows (real rows untouched)"); return 0; }
+    var cfg = ConfigSnapshot.Load(Path.Combine(repoRoot, "rules"), ModelProviderSettings.Load(repoRoot));
+    var rows = SyntheticUsage.Generate(cfg.Gateway, int.Parse(Arg("--days") ?? "30"), int.Parse(Arg("--seed") ?? "42"));
+    var n = st.InsertUsageBatch(rows);
+    Console.WriteLine($"SYNTHETIC usage seeded: {n} rows over {Arg("--days") ?? "30"} days (replaced {removed}); flagged synthetic=1. Remove with: scripts/seed-usage.sh --clear");
+    foreach (var g in rows.GroupBy(r => (r.Provider, r.ModelId)).OrderBy(g => g.Key.Provider))
+        Console.WriteLine($"  {g.Key.Provider,-12} {g.Key.ModelId,-26} {g.Count(),5} rows  {g.Sum(r => (long)r.TotalTokens),10:N0} tokens  ${g.Sum(r => r.Cost):0.0000}{(g.Any(r => r.PriceSource == "placeholder") ? "  (placeholder prices)" : "")}");
     return 0;
 }
 
@@ -61,6 +80,7 @@ if (cmd == "export")
         routing = s.Store.RoutingForRun(id).Select(r => new { r.task_type, r.tier, r.chosen_model_id, r.required_quality, r.reason, r.tokens_in, r.tokens_out, r.latency_ms, r.outcome }),
         prs = fixes.Where(f => f.PrUrl != null).Select(f => new { f.FixerType, f.PrUrl, f.Branch, f.VerificationResult }).DistinctBy(x => x.PrUrl),
         controls = ControlsView(s),
+        usage = UsageReplay(s, run),   // per-call usage + precomputed Usage-tab views for this run (replay has no backend)
     };
     var node = JsonSerializer.SerializeToNode(export, new JsonSerializerOptions(Schema.Json))!;
     static void Strip(System.Text.Json.Nodes.JsonNode? n)   // internal hashes the replay does not need (and that secret scanners flag as "generic key")
@@ -138,6 +158,41 @@ app.MapPost("/api/controls/killswitch", (Kill k) =>
     foreach (var st in RunRegistry.Active) st.Feed.Publish("guards", new { kill = svc.Kill.IsOn });
     return Results.Ok(new { kill_switch = svc.Kill.IsOn });
 });
+// ------------------------------------------------ usage (model calls, tokens, cost) ------------------------------------------------
+app.MapGet("/api/usage/summary", (HttpRequest q) =>
+{
+    if (!TryUsageFilter(q, out var f, out var err)) return Results.BadRequest(new { error = err });
+    var groupBy = q.Query["groupBy"].FirstOrDefault();
+    if (groupBy != null && !UsageAggregator.GroupKeys.Contains(groupBy)) return Results.BadRequest(new { error = $"groupBy must be one of {string.Join("|", UsageAggregator.GroupKeys)}" });
+    var rows = svc.Store.QueryUsage(f);
+    return Results.Json(new { filter = FilterView(f), totals = UsageAggregator.Totals(rows), group_by = groupBy, groups = groupBy == null ? null : UsageAggregator.Group(rows, groupBy, f.From, f.To) }, json);
+});
+app.MapGet("/api/usage/calls", (HttpRequest q) =>
+{
+    if (!TryUsageFilter(q, out var f, out var err)) return Results.BadRequest(new { error = err });
+    var page = int.TryParse(q.Query["page"], out var pg) && pg > 0 ? pg : 1;
+    var size = int.TryParse(q.Query["pageSize"], out var ps) ? Math.Clamp(ps, 1, 500) : 25;
+    var (total, items) = svc.Store.QueryUsagePage(f, page, size);
+    return Results.Json(new { filter = FilterView(f), page, page_size = size, total, pages = (total + size - 1) / size, items }, json);
+});
+app.MapGet("/api/usage/calls.csv", (HttpRequest q) =>
+{
+    if (!TryUsageFilter(q, out var f, out var err)) return Results.BadRequest(new { error = err });
+    var rows = svc.Store.QueryUsage(f);
+    var csv = UsageCsv(rows);
+    var name = $"secagent-usage_{f.From:yyyyMMdd}-{f.To:yyyyMMdd}{(f.Synthetic == "exclude" ? "_real" : rows.Any(r => r.Synthetic) ? "_incl-synthetic" : "")}.csv";
+    return Results.File(System.Text.Encoding.UTF8.GetBytes(csv), "text/csv; charset=utf-8", name);
+});
+app.MapGet("/api/usage/budget", (HttpRequest q) =>
+{
+    if (!TryUsageFilter(q, out var f, out var err)) return Results.BadRequest(new { error = err });
+    var today = UsageMath.TodayIst();
+    var month = new UsageFilter { From = new DateOnly(today.Year, today.Month, 1), To = today, Synthetic = f.Synthetic, Model = f.Model, Agent = f.Agent, Run = f.Run, Provider = f.Provider };
+    return Results.Json(UsageAggregator.Budget(svc.Store.QueryUsage(f), svc.Store.QueryUsage(month), f, svc.Cfg.Policies), json);
+});
+app.MapGet("/api/usage/facets", (HttpRequest q) =>
+    TryUsageFilter(q, out var f, out var err) ? Results.Json(svc.Store.UsageFacets(f), json) : Results.BadRequest(new { error = err }));
+
 var port = Arg("--port") ?? Environment.GetEnvironmentVariable("SECAGENT_PORT") ?? "8795";
 Console.WriteLine($"Security Triage & Fix Agent dashboard on http://localhost:{port} (config {svc.Cfg.Label})");
 app.Run($"http://127.0.0.1:{port}");
@@ -157,6 +212,52 @@ static object ControlsView(AgentServices svc) => new
     authority = svc.Cfg.Policies.Authority, routes = svc.Cfg.Routing.Routes, tiers = svc.Cfg.Gateway.Tiers.ToDictionary(t => t.Key, t => t.Value.Select(d => d.Model)),
     tool_allow_lists = svc.Cfg.Routing.Agents,
 };
+
+// Usage query string: range=today|7d|30d or from/to (IST dates, inclusive), model, agent, provider, task, run, synthetic=include|exclude|only.
+static bool TryUsageFilter(HttpRequest q, out UsageFilter f, out string? error)
+{
+    var qs = q.Query; error = null;
+    DateOnly? D(string k) => DateOnly.TryParseExact(qs[k].FirstOrDefault(), "yyyy-MM-dd", out var d) ? d : null;
+    var (pf, pt) = UsageMath.Preset(qs["range"].FirstOrDefault() ?? "7d");
+    string? S(string k) => qs[k].FirstOrDefault() is { Length: > 0 } v ? v : null;
+    f = new UsageFilter
+    {
+        From = D("from") ?? pf, To = D("to") ?? pt, Model = S("model"), Agent = S("agent"), Provider = S("provider"), Task = S("task"),
+        Run = Guid.TryParse(qs["run"].FirstOrDefault(), out var g) ? g : null,
+        Synthetic = S("synthetic") is "exclude" or "only" ? S("synthetic")! : "include",
+    };
+    if (f.To < f.From) { error = "to is before from"; return false; }
+    if (f.Days > 366) { error = "range is limited to 366 days"; return false; }
+    return true;
+}
+static object FilterView(UsageFilter f) => new
+{
+    from = f.From, to = f.To, days = f.Days, tz = "Asia/Kolkata (IST, UTC+5:30)", from_utc = f.Window.FromUtc, to_utc_exclusive = f.Window.ToUtcExclusive,
+    f.Model, f.Agent, f.Provider, f.Task, f.Run, f.Synthetic,
+};
+static string UsageCsv(IEnumerable<ModelUsage> rows)
+{
+    static string C(object? v) { var s = Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture) ?? ""; return s.IndexOfAny([',', '"', '\n', '\r']) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s; }
+    var sb = new System.Text.StringBuilder("ts_utc,ts_ist,run_id,repo,pr_number,mode,agent_id,task_purpose,tier,model_id,model_version,deployment,provider,input_tokens,output_tokens,total_tokens,latency_ms,cost_usd,price_source,outcome,outcome_detail,schema_attempts,fallback_used,cache_hit,synthetic\n");
+    foreach (var u in rows)
+        sb.AppendJoin(',', new object?[] { u.TsUtc.ToString("yyyy-MM-ddTHH:mm:ssZ"), u.TsIst, u.RunId, u.Repo, u.PrNumber, u.Mode, u.AgentId, u.TaskPurpose, u.Tier, u.ModelId, u.ModelVersion,
+            u.Deployment, u.Provider, u.InputTokens, u.OutputTokens, u.TotalTokens, u.LatencyMs, u.Cost, u.PriceSource, u.Outcome, u.OutcomeDetail, u.SchemaAttempts,
+            u.FallbackUsed ? 1 : 0, u.CacheHit ? 1 : 0, u.Synthetic ? 1 : 0 }.Select(C)).Append('\n');
+    return sb.ToString();
+}
+static object UsageReplay(AgentServices s, RunRecord run)
+{
+    var f = new UsageFilter { From = UsageMath.IstDay(run.StartedAt).AddDays(-1), To = UsageMath.IstDay(run.EndedAt ?? DateTime.UtcNow).AddDays(1), Run = run.RunId, Synthetic = "exclude" };
+    var rows = s.Store.QueryUsage(f);
+    var day = new UsageFilter { From = UsageMath.IstDay(run.StartedAt), To = UsageMath.IstDay(run.EndedAt ?? run.StartedAt), Run = run.RunId, Synthetic = "exclude" };
+    return new
+    {
+        note = "Per-call usage of this recorded run (real rows only). Local Ollama models cost $0.",
+        filter = FilterView(day), calls = rows, totals = UsageAggregator.Totals(rows),
+        by = UsageAggregator.GroupKeys.Where(k => k != "run").ToDictionary(k => k, k => UsageAggregator.Group(rows, k, day.From, day.To)),   // single run: no run grouping
+        budget = UsageAggregator.Budget(rows, rows, day, s.Cfg.Policies, run.EndedAt ?? run.StartedAt),
+    };
+}
 
 record StartRun(string? Repo, int? Pr, bool? Fresh);
 record Review(string? Decision);

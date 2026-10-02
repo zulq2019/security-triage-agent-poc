@@ -330,6 +330,22 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
 
     static readonly string[][] SevFlag = [["info", "Info"], ["low", "Low"], ["med", "Medium"], ["high", "High"], ["crit", "Critical"]];
 
+    /// <summary>Usage row for a triage decision reused without a model call (cache_hit = 1, zero tokens). Never fails the step.</summary>
+    void UsageCacheHit(TriageDecision? prev, string detail)
+    {
+        try
+        {
+            S.Store.InsertUsage(new ModelUsage
+            {
+                RunId = RunId, Repo = R.Pr.Repo, PrNumber = R.Pr.Number, Mode = R.Run.TriggerType, AgentId = "triage-agent", TaskPurpose = "triage",
+                Tier = S.Cfg.Gateway.TaskTiers.GetValueOrDefault("triage", "small"), ModelId = prev?.ModelId ?? "unknown", ModelVersion = prev?.ModelVersion ?? "",
+                Deployment = "cache", Provider = UsageMath.ProviderOf(S.Cfg.Gateway), PriceSource = UsageMath.ProviderOf(S.Cfg.Gateway) == "ollama" ? "local" : "none",
+                Outcome = "ok", OutcomeDetail = detail, CacheHit = true, TraceId = Telemetry.TraceId,
+            });
+        }
+        catch { /* observability only */ }
+    }
+
     async Task<string> TriageOneAsync(Finding f)
     {
         var rp = S.Cfg.RulePackFor(f.IssueType);
@@ -340,6 +356,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
             var prev = S.Store.LatestDecision(f.FindingId);
             var e0 = Feed.Entry("triage", $"{label} → already {f.Status} · decision \"{prev?.Decision}\" reused (idempotent re-run)", null, ["noise", "Known"]);
             Feed.Detail(e0, new { type = "evid", text = $"Fingerprint {f.Short} already tracked since {f.FirstSeen:u}; prior decision by {prev?.ModelId} ({prev?.PromptVersion}, {prev?.RulePackVersion}): {prev?.Reason}" });
+            UsageCacheHit(prev, "already_triaged");
             return f.Status is Status.Suppressed ? "suppressed" : f.Status is Status.NeedsHuman or Status.SuppressPending or Status.AcceptPending ? "human" : "fix";
         }
         var key = Hashing.Sha256($"{f.Fingerprint}|{rp.Ref}|{prompt.Ref}");
@@ -352,6 +369,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
         if (cached != null)
         {
             (decision, sev, reason, conf, proposed) = (cached.Decision, cached.SeverityEffective, cached.Reason, cached.Confidence, cached.ProposedDecision ?? cached.Decision);
+            UsageCacheHit(cached, "decision_reused");
         }
         else
         {

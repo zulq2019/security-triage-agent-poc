@@ -35,6 +35,13 @@ public sealed class SqlStore
         }
     }
 
+    /// <summary>Applies db/migrations/*.sql in name order after schema.sql (each migration is idempotent).</summary>
+    public void EnsureMigrations(string migrationsDir)
+    {
+        if (!Directory.Exists(migrationsDir)) return;
+        foreach (var f in Directory.GetFiles(migrationsDir, "*.sql").OrderBy(x => x, StringComparer.Ordinal)) EnsureSchema(f);
+    }
+
     // ---------- Run ----------
     public void InsertRun(RunRecord r)
     {
@@ -158,6 +165,7 @@ public sealed class SqlStore
     public void ResetAll()
     {
         using var c = Open();
+        c.Execute("IF OBJECT_ID('dbo.ModelUsage') IS NOT NULL DELETE FROM dbo.ModelUsage");
         foreach (var t in new[] { "RunEvent", "HumanTask", "RoutingDecision", "ContextPack", "IdempotencyLedger", "RiskAcceptance", "Evidence", "FixAttempt",
                      "TriageDecision", "PolicyViolation", "StatusHistory", "FindingOccurrence", "Finding", "Run" })
             c.Execute($"DELETE FROM dbo.{t}");
@@ -204,6 +212,70 @@ public sealed class SqlStore
     public List<dynamic> RoutingForRun(Guid runId) { using var c = Open(); return c.Query("SELECT * FROM RoutingDecision WHERE run_id=@runId ORDER BY decided_at", new { runId }).ToList(); }
     public List<dynamic> PacksForRun(Guid runId) { using var c = Open(); return c.Query("SELECT * FROM ContextPack WHERE run_id=@runId", new { runId }).ToList(); }
 
+    // ---------- Model usage (one row per model call) ----------
+    const string UsageInsert = @"INSERT INTO ModelUsage (usage_id,routing_id,context_pack_id,run_id,ts_utc,repo,pr_number,mode,agent_id,task_purpose,tier,model_id,model_version,
+        deployment,provider,input_tokens,output_tokens,latency_ms,cost,price_source,outcome,outcome_detail,schema_attempts,fallback_used,cache_hit,synthetic,trace_id)
+        VALUES (@UsageId,@RoutingId,@ContextPackId,@RunId,@TsUtc,@Repo,@PrNumber,@Mode,@AgentId,@TaskPurpose,@Tier,@ModelId,@ModelVersion,
+        @Deployment,@Provider,@InputTokens,@OutputTokens,@LatencyMs,@Cost,@PriceSource,@Outcome,@OutcomeDetail,@SchemaAttempts,@FallbackUsed,@CacheHit,@Synthetic,@TraceId)";
+    public void InsertUsage(ModelUsage u) { using var c = Open(); c.Execute(UsageInsert, u); }
+    public int InsertUsageBatch(IEnumerable<ModelUsage> rows)
+    {
+        using var c = Open();
+        using var tx = c.BeginTransaction();
+        var n = c.Execute(UsageInsert, rows, tx);
+        tx.Commit();
+        return n;
+    }
+    public int DeleteSyntheticUsage() { using var c = Open(); return c.Execute("DELETE FROM ModelUsage WHERE synthetic = 1"); }
+    /// <summary>Test helper: removes rows for the given (test-only) run ids.</summary>
+    public int DeleteUsageForRuns(IEnumerable<Guid> runIds) { using var c = Open(); return c.Execute("DELETE FROM ModelUsage WHERE run_id = @id", runIds.Select(id => new { id })); }
+
+    static (string Where, DynamicParameters P) UsageWhere(UsageFilter f)
+    {
+        var (from, to) = f.Window;
+        var p = new DynamicParameters(new { from, to });
+        var w = new List<string> { "ts_utc >= @from", "ts_utc < @to" };
+        if (!string.IsNullOrEmpty(f.Model)) { w.Add("model_id = @model"); p.Add("model", f.Model); }
+        if (!string.IsNullOrEmpty(f.Agent)) { w.Add("agent_id = @agent"); p.Add("agent", f.Agent); }
+        if (!string.IsNullOrEmpty(f.Provider)) { w.Add("provider = @provider"); p.Add("provider", f.Provider); }
+        if (!string.IsNullOrEmpty(f.Task)) { w.Add("task_purpose = @task"); p.Add("task", f.Task); }
+        if (f.Run is { } run) { w.Add("run_id = @run"); p.Add("run", run); }
+        if (f.Synthetic == "exclude") w.Add("synthetic = 0");
+        else if (f.Synthetic == "only") w.Add("synthetic = 1");
+        return (" WHERE " + string.Join(" AND ", w), p);
+    }
+    static ModelUsage Utc(ModelUsage u) { u.TsUtc = DateTime.SpecifyKind(u.TsUtc, DateTimeKind.Utc); return u; }
+
+    public List<ModelUsage> QueryUsage(UsageFilter f)
+    {
+        var (where, p) = UsageWhere(f);
+        using var c = Open();
+        return c.Query<ModelUsage>("SELECT * FROM ModelUsage" + where + " ORDER BY ts_utc", p).Select(Utc).ToList();
+    }
+    public (int Total, List<ModelUsage> Items) QueryUsagePage(UsageFilter f, int page, int pageSize)
+    {
+        var (where, p) = UsageWhere(f);
+        p.Add("skip", Math.Max(0, page - 1) * pageSize); p.Add("take", pageSize);
+        using var c = Open();
+        var total = c.ExecuteScalar<int>("SELECT COUNT(*) FROM ModelUsage" + where, p);
+        var items = c.Query<ModelUsage>("SELECT * FROM ModelUsage" + where + " ORDER BY ts_utc DESC, usage_id OFFSET @skip ROWS FETCH NEXT @take ROWS ONLY", p).Select(Utc).ToList();
+        return (total, items);
+    }
+    /// <summary>Distinct filter values in the window (synthetic toggle applied, other filters not), for the dashboard dropdowns.</summary>
+    public object UsageFacets(UsageFilter f)
+    {
+        var (where, p) = UsageWhere(new UsageFilter { From = f.From, To = f.To, Synthetic = f.Synthetic });
+        using var c = Open();
+        return new
+        {
+            models = c.Query<(string, string)>("SELECT DISTINCT model_id, provider FROM ModelUsage" + where + " ORDER BY model_id", p).Select(x => new { model = x.Item1, provider = x.Item2 }),
+            agents = c.Query<string>("SELECT DISTINCT agent_id FROM ModelUsage" + where + " ORDER BY agent_id", p),
+            runs = c.Query("SELECT run_id, MAX(repo) AS repo, MAX(pr_number) AS pr_number, MAX(CAST(synthetic AS INT)) AS synthetic, MAX(ts_utc) AS last_utc FROM ModelUsage" + where +
+                           " GROUP BY run_id ORDER BY MAX(ts_utc) DESC", p).Take(200),
+            any_synthetic = c.ExecuteScalar<int>("SELECT COUNT(*) FROM ModelUsage WHERE synthetic = 1") > 0,
+        };
+    }
+
     // ---------- Human tasks ----------
     public void InsertTask(HumanTask t)
     {
@@ -221,7 +293,7 @@ public sealed class SqlStore
     public IEnumerable<string> AllText()
     {
         using var c = Open();
-        foreach (var t in new[] { "Finding", "TriageDecision", "FixAttempt", "Evidence", "ContextPack", "RoutingDecision", "HumanTask", "RunEvent", "Run", "IdempotencyLedger", "StatusHistory" })
+        foreach (var t in new[] { "Finding", "TriageDecision", "FixAttempt", "Evidence", "ContextPack", "RoutingDecision", "HumanTask", "RunEvent", "Run", "IdempotencyLedger", "StatusHistory", "ModelUsage" })
             foreach (IDictionary<string, object> row in c.Query($"SELECT * FROM {t}"))
                 foreach (var v in row.Values) if (v is string s) yield return s;
     }

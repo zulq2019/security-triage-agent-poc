@@ -8,6 +8,10 @@ budgets:
     cost: 0.0
     max_fixes: 10
     max_minutes: 45
+usage_budgets:                # period budgets for the Usage view (budget burn). POC values, not a finance-approved budget.
+  daily_tokens: 300000
+  monthly_tokens: 6000000
+  monthly_cost: 25.0          # USD; local models are $0, hosted rows use the gateway price book (placeholders today)
 thresholds:
   confidence_min: 0.6         # below -> NEEDS_HUMAN
   low_budget_fraction: 0.15   # below -> standard tasks to small tier; high tasks stop

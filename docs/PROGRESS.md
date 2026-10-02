@@ -14,3 +14,9 @@ Times are IST (UTC+5:30).
   - Added: model provider switch (ollama | openai | azureopenai, key from env only, 3b-only profile), Windows-safe tool lookup, `secagent export`, replay mode, `replay-static/`.
 - 2026-10-02 ~21:11: D-06 re-run passed (6.9 s, 0 new PRs). Kill-switch test passed (stopped in 2.2 s; new runs refused). 43/43 tests pass. gitleaks (with a narrow repo allowlist) and trivy are clean on this repo.
   - Published the private repo `zulq2019/security-triage-agent-poc` (`main` = README only) and opened PR #1 from `feature/slice-1-tracer-bullet`. Not merged.
+- 2026-10-02 ~22:15: **Usage observability**:
+  - New `ModelUsage` table (migration 002, applied on start). Real calls are backfilled from `RoutingDecision` (14 real calls / 16,697 tokens from run 9bcd4579), and the gateway now writes a row per call. Triage decisions that are reused are recorded as zero-token cache hits.
+  - Added `/api/usage/{summary,calls,calls.csv,budget,facets}` and the dashboard Usage tab: IST ranges, filters, KPIs, an SVG daily chart, by model/agent/task tables, budget burn vs `policies.yaml`, and recent calls with a run drill-down.
+  - Price book with **placeholder** hosted prices in `models.yaml`. Synthetic seeding (`scripts/seed-usage.sh`, flagged `synthetic=1`, off by default) has a badge and a toggle. The replay export now carries per-call usage.
+  - 21 new tests (cost, outcome mapping, IST boundaries, aggregation, budget burn, synthetic generator, SQL boundary/paging integration). 64/64 pass.
+  - No new real run: re-runs on PR #1 reuse every triage decision and PR, so they make no model calls. The existing real calls were reused instead.

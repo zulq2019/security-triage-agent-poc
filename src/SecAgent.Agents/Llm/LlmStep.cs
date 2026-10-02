@@ -13,6 +13,7 @@ public static class LlmStep
         IEnumerable<ComponentInput> components, CallSpec spec, CancellationToken ct)
     {
         var feed = run.Feed;
+        spec = spec with { TriggerType = run.Run.TriggerType, Repo = run.Pr.Repo, PrNumber = run.Pr.Number };   // usage record context
         var t0 = feed.ToolStart(entryId, "context.build", $"agent={agentId} purpose={spec.TaskType}");
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var pr = s.Context.Build(run.Run.RunId, agentId, findingId, groupKey, components);

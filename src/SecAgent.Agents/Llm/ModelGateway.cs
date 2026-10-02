@@ -20,7 +20,8 @@ public sealed class RunBudget(int tokens, decimal cost)
     public void Add(int t, decimal c) { Interlocked.Add(ref _used, t); lock (this) _cost += c; }
 }
 
-public sealed record CallSpec(string TaskType, string SchemaName, string? Severity = null, int AttemptNo = 1, double? Confidence = null, string TriggerType = "pr");
+public sealed record CallSpec(string TaskType, string SchemaName, string? Severity = null, int AttemptNo = 1, double? Confidence = null, string TriggerType = "pr",
+    string? Repo = null, int? PrNumber = null);
 public sealed record GatewayResult(JsonElement Json, RoutingDecision Routing, double Seconds);
 
 public sealed class ModelUnavailableException(string m) : Exception(m);
@@ -154,11 +155,14 @@ public sealed class ModelGateway
                     var json = await InvokeWithSchemaRetriesAsync(d, pack, spec, rd, linked.Token);
                     _failures[d.Id] = 0;
                     rd.LatencyMs = (int)sw.ElapsedMilliseconds;
-                    rd.Cost = rd.TokensIn / 1000m * d.CostPer1kIn + rd.TokensOut / 1000m * d.CostPer1kOut;
+                    var price = UsageMath.PriceFor(_cfg.Gateway, Provider, d.Model, d);
+                    rd.Cost = UsageMath.Cost(rd.TokensIn, rd.TokensOut, price);
                     rd.Outcome = "ok";
                     budget.Add(rd.TokensIn + rd.TokensOut, rd.Cost);
                     span?.SetTag("gen_ai.usage.input_tokens", rd.TokensIn); span?.SetTag("gen_ai.usage.output_tokens", rd.TokensOut);
+                    span?.SetTag("secagent.usage.cost", rd.Cost);
                     _store.InsertRouting(rd);
+                    RecordUsage(rd, pack, spec, price.Source, span);
                     return new GatewayResult(json, rd, sw.Elapsed.TotalSeconds);
                 }
                 catch (SchemaInvalidException) { throw; }
@@ -174,12 +178,35 @@ public sealed class ModelGateway
         {
             rd.LatencyMs = (int)sw.ElapsedMilliseconds;
             rd.Outcome = e is OperationCanceledException && _kill.IsOn ? "cancelled_kill_switch" : e.GetType().Name;
-            budget.Add(rd.TokensIn + rd.TokensOut, 0);
+            var dep = candidates.FirstOrDefault(c => c.Id == rd.Deployment);
+            var price = UsageMath.PriceFor(_cfg.Gateway, Provider, rd.ChosenModelId, dep);
+            rd.Cost = UsageMath.Cost(rd.TokensIn, rd.TokensOut, price);   // tokens spent on failed attempts still cost money on a hosted provider
+            budget.Add(rd.TokensIn + rd.TokensOut, rd.Cost);
             _store.InsertRouting(rd);
+            RecordUsage(rd, pack, spec, price.Source, span);
             span?.SetStatus(ActivityStatusCode.Error, e.Message);
             throw;
         }
         finally { _gate.Release(); }
+    }
+
+    string Provider => UsageMath.ProviderOf(_cfg.Gateway);
+
+    /// <summary>One ModelUsage row per call (usage/cost observability). Never fails the call: a usage write error is tagged on the span.</summary>
+    void RecordUsage(RoutingDecision rd, ContextPack pack, CallSpec spec, string priceSource, Activity? span)
+    {
+        try
+        {
+            _store.InsertUsage(new ModelUsage
+            {
+                RoutingId = rd.RoutingId, ContextPackId = pack.ContextPackId, RunId = rd.RunId, TsUtc = rd.DecidedAt, Repo = spec.Repo, PrNumber = spec.PrNumber,
+                Mode = spec.TriggerType, AgentId = pack.AgentId, TaskPurpose = spec.TaskType, Tier = rd.Tier, ModelId = rd.ChosenModelId, ModelVersion = rd.ModelVersion,
+                Deployment = rd.Deployment, Provider = Provider, InputTokens = rd.TokensIn, OutputTokens = rd.TokensOut, LatencyMs = rd.LatencyMs, Cost = rd.Cost,
+                PriceSource = priceSource, Outcome = UsageMath.Outcome(rd.Outcome, rd.SchemaAttempts, rd.FallbackUsed), OutcomeDetail = rd.Outcome == "ok" ? null : rd.Outcome,
+                SchemaAttempts = rd.SchemaAttempts, FallbackUsed = rd.FallbackUsed, TraceId = rd.TraceId,
+            });
+        }
+        catch (Exception e) { span?.SetTag("secagent.usage.write_error", e.GetType().Name); }
     }
 
     async Task<JsonElement> InvokeWithSchemaRetriesAsync(DeploymentConfig d, ContextPack pack, CallSpec spec, RoutingDecision rd, CancellationToken ct)

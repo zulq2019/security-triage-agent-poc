@@ -38,9 +38,14 @@ GitHub PR ──► Scanners (gitleaks, trivy, semgrep, binary check) on head + 
 | Evidence / raw output | Write-once local folder `.data/blob/{raw,evidence}` with sha256 | Azure Blob with immutability policy |
 | Config | Rules-as-code under `rules/` (policies, routing, gateway, context, rule packs, prompts, schemas), hashed into a config snapshot label on every run | Azure App Configuration snapshot + feature flags (kill switch, per-repo enablement) |
 | Secrets | `~/.secagent/secagent.env` (chmod 600): SQL connection string and HMAC key. Secret values are never stored, only HMACs | Key Vault (HMAC key, GitHub App key); secrets fixer writes Key Vault references |
+| Model usage / cost | `ModelUsage` table: one row per model call (tokens in/out, latency, cost from `models.yaml`, outcome, cache hit, synthetic flag), written by `ModelGateway`. Dashboard Usage tab + `/api/usage/*` + CSV | Application Insights / Log Analytics (`customMetrics`/`AppDependencies` with GenAI attributes, KQL workbooks) fed by the APIM AI gateway's `azure-openai-emit-token-metric` / `llm-emit-token-metric` policy (prompt/completion/total tokens per subscription, deployment, custom dimensions such as agent and run). Cost from the Azure price sheet / Cost Management; the dashboard reads the same dimensions |
 | Telemetry | OpenTelemetry spans (workflow, executors, tools, GenAI client) → JSONL in `.data/traces`, OTLP if `OTEL_EXPORTER_OTLP_ENDPOINT` set | Application Insights / Azure Monitor |
 | GitHub | `gh` CLI as the signed-in user: `git push` of `fix/*` branches, `gh pr create`, `gh pr list` for idempotency. No merge/approve tool exists | GitHub App with contents:write + pull_requests:write only, branch protection on `main` |
 | Kill switch | `.data/control/killswitch` flag + dashboard toggle: refuses tool calls and cancels in-flight model calls | App Configuration feature flag |
+
+## Usage observability on Azure
+
+In the POC, the gateway writes one `ModelUsage` row per call to SQL, and the dashboard aggregates those rows by IST day, model, agent, task, run and provider. In Azure, the APIM AI gateway in front of Azure OpenAI emits token metrics per request using the `azure-openai-emit-token-metric` policy (`llm-emit-token-metric` for other LLM APIs), with dimensions such as API, subscription, deployment, and custom `agent` / `run-id` / `task` headers that the gateway sets. Those metrics go to Application Insights, alongside the OpenTelemetry GenAI spans (`gen_ai.usage.input_tokens` / `output_tokens`). Log Analytics KQL or an Azure Workbook replaces the Usage tab's aggregation, and Cost Management / the price sheet replaces the placeholder `price_book`. The `ModelUsage` table can stay as the per-run audit record (Azure SQL), or it can be dropped in favour of Log Analytics.
 
 ## Guardrails (what the code enforces, not the model)
 
@@ -64,6 +69,6 @@ GitHub PR ──► Scanners (gitleaks, trivy, semgrep, binary check) on head + 
 | `src/SecAgent.Agents/Workflow` | Agent Framework executors, workflow graph, RunService (checkpoints, kill switch, review) |
 | `src/SecAgent.Dashboard` | `secagent` CLI + ASP.NET dashboard (SSE live feed, findings, controls) |
 | `rules/` | Rules-as-code: policies, routing, gateway, context, rule packs, prompts, JSON schemas, golden expectations |
-| `db/schema.sql` | Store schema (idempotent) |
+| `db/schema.sql`, `db/migrations/` | Store schema and idempotent migrations (002 = ModelUsage + backfill) |
 | `tests/SecAgent.Tests` | Unit + golden tests |
-| `scripts/` | `capture-run.js` (dashboard screenshots), `rerun-check.sh` (D-06) |
+| `scripts/` | `capture-run.js` / `capture-usage.js` (dashboard screenshots), `rerun-check.sh` (D-06), `build-replay.sh`, `seed-usage.sh` (SYNTHETIC usage demo data) |

@@ -85,6 +85,29 @@ Only the provider, endpoint and models change. The routing policy (task → tier
 - **Claude Code:** in the repo root run `claude`. `CLAUDE.md` points at `AGENTS.md` (build/test commands, layout and the guardrails an assistant must not weaken).
 - Both tools inherit your shell environment, so start them from a terminal where `OPENAI_API_KEY` / `SECAGENT_SQL` are set (or set them at user scope as above).
 
+## Usage: model calls, tokens and cost
+
+Every model call writes one `ModelUsage` row (`db/migrations/002_model_usage.sql`, applied on start; rows recorded before the table existed are backfilled from `RoutingDecision` + `ContextPack` + `Run`). A row holds the UTC timestamp (shown in IST), run id, repo/PR, mode, agent, task purpose (triage/fix/verify/summarise), tier, model id + version, deployment, provider, input/output/total tokens, latency, cost, price source, outcome (`ok` · `schema_retry` · `fallback` · `error` · `timeout`) and a cache-hit flag. Cache hits are triage decisions reused without a model call, so they spend zero tokens.
+
+- **Cost** = input/1k × `cost_per_1k_in` + output/1k × `cost_per_1k_out`. Local Ollama models are always **$0** and are tagged "local model". Hosted providers use the deployment's own price (appsettings `*CostPer1kIn/Out`) if one is set. Otherwise they use the `price_book` in `rules/gateway/models.yaml`. **The prices in that book are placeholders, not real prices**: rows priced from it carry `price_source = placeholder`, and the UI tags them "placeholder price".
+- **Dashboard → Usage tab**:
+  - range Today / 7 days / 30 days / custom (IST calendar days), plus model / agent / run filters
+  - KPI cards: calls, input and output tokens, cost, avg/p95 latency, error and retry rate
+  - a daily stacked input/output token chart with a cost line (inline SVG, no CDN)
+  - by-model / by-agent / by-task tables with % of total
+  - budget burn against `policies.yaml` (per-run token cap, `usage_budgets` daily/monthly tokens and monthly cost, month-end projection)
+  - a paged recent-calls table with a run drill-down
+  - Export CSV
+- **API** (all take `range=today|7d|30d` or `from=YYYY-MM-DD&to=YYYY-MM-DD` (IST, inclusive), `model`, `agent`, `provider`, `task`, `run`, `synthetic=include|exclude|only`):
+  - `GET /api/usage/summary?groupBy=model|agent|task|run|day|provider`
+  - `GET /api/usage/calls?page=1&pageSize=25`
+  - `GET /api/usage/calls.csv`
+  - `GET /api/usage/budget`
+  - `GET /api/usage/facets`
+- **Synthetic demo data** (only one real run with model calls exists so far): `scripts/seed-usage.sh` (or `.ps1`) writes about 30 days of plausible usage for the Ollama models and the OpenAI/Azure placeholder models from config. Every row is flagged `synthetic = 1` and uses `synthetic-org/*` repos. It is **not seeded by default**. When synthetic rows are in view the tab shows a "Synthetic sample data in view" badge, and the "Show synthetic" toggle hides them. Remove them with `scripts/seed-usage.sh --clear`.
+- **Replay**: `secagent export` adds the run's per-call usage and the precomputed Usage views to `run.json`, so `replay-static/` has a Usage tab too (that run only, no filters).
+- Screenshots: `shots/usage-real-only*.png`, `shots/usage-synthetic-30d*.png`, `shots/usage-synthetic-7d*.png`, `shots/usage-replay.png` (`scripts/capture-usage.js`).
+
 ## Replay a recorded run (no backend)
 
 `replay-static/` holds a static build of the clean run (`index.html` + `run.json` + `run.js` + `assets/app.js`). Open `replay-static/index.html` in a browser (works from `file://`) or serve the folder with any static server. The dashboard plays back the real event stream with its recorded timings, with 1×/2× speed and a Replay button, and is marked "Replay of a recorded run". Rebuild it from any run with `scripts/build-replay.sh [run-id]` (uses `secagent export`, which refuses to write if a secret pattern is found). It is not deployed anywhere.

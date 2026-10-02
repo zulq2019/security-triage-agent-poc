@@ -15,7 +15,10 @@ public sealed class PolicyConfig
     public RetryConfig Retries { get; set; } = new();
     public AuthorityConfig Authority { get; set; } = new();
     public Dictionary<string, string> PrMode { get; set; } = [];
+    public UsageBudgetConfig UsageBudgets { get; set; } = new();
 }
+/// <summary>Period budgets shown as "budget burn" on the Usage tab (per-run caps stay in Budgets).</summary>
+public sealed class UsageBudgetConfig { public int DailyTokens { get; set; } public int MonthlyTokens { get; set; } public decimal MonthlyCost { get; set; } }
 public sealed class BudgetConfig { public int Tokens { get; set; } public decimal Cost { get; set; } public int MaxFixes { get; set; } public int MaxMinutes { get; set; } }
 public sealed class ThresholdConfig { public double ConfidenceMin { get; set; } = 0.6; public double LowBudgetFraction { get; set; } = 0.15; }
 public sealed class RetryConfig { public int MaxFixRetries { get; set; } = 2; public int MaxSchemaRetries { get; set; } = 2; }
@@ -38,11 +41,22 @@ public sealed class GatewayConfig
     public Dictionary<string, string> TaskTiers { get; set; } = [];
     public QualityRules QualityRules { get; set; } = new();
     public Dictionary<string, int> LatencyTargetsMs { get; set; } = [];
+    public List<PriceBookEntry> PriceBook { get; set; } = [];
+}
+/// <summary>Hosted model price (USD per 1k tokens). Placeholder = true means a demo figure, not a real price.</summary>
+public sealed class PriceBookEntry
+{
+    public string Provider { get; set; } = ""; public string Tier { get; set; } = ""; public string Model { get; set; } = "";
+    [YamlMember(Alias = "cost_per_1k_in")] public decimal CostPer1kIn { get; set; }
+    [YamlMember(Alias = "cost_per_1k_out")] public decimal CostPer1kOut { get; set; }
+    public bool Placeholder { get; set; }
 }
 public sealed class DeploymentConfig
 {
     public string Id { get; set; } = ""; public string Model { get; set; } = ""; public string Version { get; set; } = "";
-    public int ContextWindow { get; set; } = 8192; public decimal CostPer1kIn { get; set; } public decimal CostPer1kOut { get; set; }
+    public int ContextWindow { get; set; } = 8192;
+    [YamlMember(Alias = "cost_per_1k_in")] public decimal CostPer1kIn { get; set; }
+    [YamlMember(Alias = "cost_per_1k_out")] public decimal CostPer1kOut { get; set; }
     public bool Fallback { get; set; } public string? Note { get; set; }
 }
 public sealed class QualityRules { public List<string> HighIfSeverity { get; set; } = []; public bool HighIfRetry { get; set; } public double HighIfConfidenceBelow { get; set; } }
