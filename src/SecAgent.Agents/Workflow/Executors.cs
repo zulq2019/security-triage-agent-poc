@@ -163,15 +163,18 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         }
         pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => GitHubPrs.FindByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
         var reused = pr is { State: "OPEN" };
+        var branch = m.Branch;
         try
         {
             if (!reused)
             {
-                await S.Tools.RunAsync("orchestrator", "git.push", $"origin {m.Branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct), Ct);
+                // A remote branch without an open PR (e.g. an earlier crashed run) is never overwritten: push under a run-suffixed name instead.
+                if (await GitWorkspace.RemoteBranchExistsAsync(m.Worktree, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
+                await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct, branch), Ct);
                 var title = PrTitle(m.FixerId, findings, fix);
                 var body = PrBody(m, g, findings, fix);
-                pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={m.Branch}", Feed, e,
-                    () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, m.Branch, title, S.Masker.Mask(body, false), Ct), Ct);
+                pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={branch}", Feed, e,
+                    () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false), Ct), Ct);
             }
             S.Store.LedgerComplete(key, pr!.Url);
         }
@@ -821,6 +824,7 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         var buildFailed = r.ExitCode != 0 && total == 0;
         if (buildFailed)
             fails = string.Join("\n", (r.StdOut + "\n" + r.StdErr).Split('\n').Where(l => l.Contains(": error ")).Select(l => l.Trim()).Distinct().Take(6));
+        fails = System.Text.RegularExpressions.Regex.Replace(fails.Replace(p.Worktree + "/", ""), @"\s*\[[^\]]+\.csproj\]", "");
         return new TestResult(r.ExitCode == 0 && failed == 0 && total > 0, buildFailed, total, passed, failed, r.ElapsedMs / 1000.0, S.Masker.Mask(fails, false), uri, hash);
     }
 

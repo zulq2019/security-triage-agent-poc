@@ -46,7 +46,7 @@ if (cmd == "run")
 }
 
 // ------------------------------------------------ dashboard ------------------------------------------------
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = Path.Combine(repoRoot, "src", "SecAgent.Dashboard", "wwwroot") });
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
 builder.Services.AddOpenTelemetry()
     .ConfigureResource(r => r.AddService("secagent-dashboard"))
@@ -115,7 +115,7 @@ app.MapPost("/api/controls/killswitch", (Kill k) =>
     foreach (var st in RunRegistry.Active) st.Feed.Publish("guards", new { kill = svc.Kill.IsOn });
     return Results.Ok(new { kill_switch = svc.Kill.IsOn });
 });
-var port = Arg("--port") ?? "8790";
+var port = Arg("--port") ?? Environment.GetEnvironmentVariable("SECAGENT_PORT") ?? "8795";
 Console.WriteLine($"Security Triage & Fix Agent dashboard on http://localhost:{port} (config {svc.Cfg.Label})");
 app.Run($"http://127.0.0.1:{port}");
 return 0;

@@ -50,6 +50,14 @@ public sealed class GitWorkspace(string workRoot)
         var head = HeadDir(runId);
         var wt = Path.Combine(RunDir(runId), "wt-" + branch.Replace('/', '-') + "-a" + attempt);
         if (Directory.Exists(wt)) await Git(head, ct, "worktree", "remove", "--force", wt);
+        // A retry re-creates the branch from the PR head: release it from the previous attempt's worktree first.
+        var list = await Git(head, ct, "worktree", "list", "--porcelain");
+        string? path = null;
+        foreach (var line in list.Split('\n'))
+        {
+            if (line.StartsWith("worktree ")) path = line[9..].Trim();
+            else if (line.Trim() == $"branch refs/heads/{branch}" && path != null) await Git(head, ct, "worktree", "remove", "--force", path);
+        }
         await Git(head, ct, "worktree", "add", "--quiet", "-B", branch, wt, fromSha);
         return wt;
     }
@@ -82,7 +90,8 @@ public sealed class GitWorkspace(string workRoot)
         (await Git(wt, ct, "ls-remote", "--heads", "origin", branch)).Trim().Length > 0;
 
     /// <summary>Plain push of a new branch. Never force-pushes.</summary>
-    public static Task<string> PushAsync(string wt, string branch, CancellationToken ct) => Git(wt, ct, "push", "--quiet", "origin", $"{branch}:{branch}");
+    public static Task<string> PushAsync(string wt, string branch, CancellationToken ct, string? remoteBranch = null) =>
+        Git(wt, ct, "push", "--quiet", "origin", $"HEAD:refs/heads/{remoteBranch ?? branch}");
 }
 
 /// <summary>GitHub operations available to agents: find and create PRs. There is intentionally no merge, approve or
