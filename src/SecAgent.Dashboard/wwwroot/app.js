@@ -1,5 +1,15 @@
 (() => {
 const $ = s => document.querySelector(s);
+// Replay mode: plays back a recorded run from static JSON with no backend (window.SECAGENT_REPLAY or ?replay=run.json).
+const REPLAY = window.SECAGENT_REPLAY || new URLSearchParams(location.search).get('replay');
+let nowFn = () => new Date();
+let REC = null;   // recorded run (replay mode)
+async function getJson(path){
+  if (!REPLAY) return (await fetch(path)).json();
+  if (path === '/api/findings') return REC ? REC.findings : [];
+  if (path === '/api/controls') return REC ? Object.assign({}, REC.controls, {kill_switch:false}) : {};
+  throw new Error('no backend in replay mode');
+}
 const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 const CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>';
 const RETRY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>';
@@ -56,7 +66,7 @@ function reset(){
   $('#prs').innerHTML = '<div class="noprs">No fix PRs yet — fixers haven\'t finished</div>'; $('#prMeta').textContent = '0 open'; $('#tasks').innerHTML = '';
   $('#gMask').textContent = '0 masked'; $('#gInj').classList.remove('hit'); $('#gInjM').textContent = '0 ignored'; $('#gRetry').textContent = '0 used'; $('#gRet').classList.remove('hit'); $('#gMeta').textContent = 'all passing';
   $('#agentsDone').textContent = '0 / 10';
-  $('#reviewBtn').style.display = 'none';
+  { const rb = $('#reviewBtn'); if (rb) rb.style.display = 'none'; }
 }
 
 function setAgent(id, s, text, tokens){
@@ -184,7 +194,7 @@ function runInfo(r){
   const live = $('#live');
   live.className = s === 'running' ? 'live' : 'live off';
   live.lastElementChild.textContent = s === 'running' ? 'Live' : s === 'waiting' ? 'Paused · awaiting human' : 'Ended';
-  $('#reviewBtn').style.display = s === 'waiting' ? '' : 'none';
+  { const rb = $('#reviewBtn'); if (rb) rb.style.display = s === 'waiting' && !REPLAY ? '' : 'none'; }
   if (r.used) { st.total = r.used; renderTokens(); }
   refreshStatusline();
 }
@@ -215,7 +225,7 @@ function connect(runId){
 }
 setInterval(() => {
   const r = st && st.run; if (!r) return;
-  const end = r.ended ? new Date(r.ended) : new Date();
+  const end = r.ended ? new Date(r.ended) : nowFn();
   const el = (end - new Date(r.started)) / 1000;
   $('#elapsed').textContent = mmss(el);
   if (r.status === 'running'){
@@ -242,6 +252,7 @@ function killUi(on){
   $('#killS').textContent = on ? 'All agents stopped · new runs refused' : 'Stops all agents & cancels in-flight calls';
 }
 $('#killSw').onclick = async () => {
+  if (REPLAY){ toast('Kill switch is disabled in replay (no backend)'); return; }
   const on = !$('#killSw').classList.contains('on');
   const r = await fetch('/api/controls/killswitch', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({on, by:'dashboard'})});
   const j = await r.json(); killUi(j.kill_switch); toast(j.kill_switch ? 'Kill switch ON — run cancelled' : 'Kill switch off');
@@ -254,7 +265,7 @@ document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
   if (t.dataset.v === 'controls') loadControls();
 });
 async function loadFindings(){
-  const fs = await (await fetch('/api/findings')).json();
+  const fs = await getJson('/api/findings');
   const inPr = fs.filter(f => !String(f.scope).startsWith('backlog')), bl = fs.filter(f => String(f.scope).startsWith('backlog'));
   $('#ctFind').textContent = inPr.length; $('#ctBack').textContent = bl.length;
   const row = f => `<tr><td><b>${esc(f.title)}</b><div class="note">${esc(f.file_path || f.component_name || '')}${f.component_version ? ' ' + esc(f.component_version) : ''}</div></td>
@@ -269,7 +280,7 @@ async function loadFindings(){
     <table class="ft">${hdr}${bl.map(row).join('') || '<tr><td colspan="8" class="note">Empty</td></tr>'}</table>`;
 }
 async function loadControls(){
-  const c = await (await fetch('/api/controls')).json();
+  const c = await getJson('/api/controls');
   killUi(c.kill_switch);
   const pre = (t, o) => `<div class="panel"><h3>${t}</h3><pre>${esc(JSON.stringify(o, null, 2))}</pre></div>`;
   $('#v-controls').innerHTML = `<div class="panel"><h3>Kill switch</h3><div class="note"><b>${c.kill_switch ? 'ON: runs refused, in-flight runs cancelled' : 'Off'}</b> · toggle on the Live run tab · every change is audited in .data/control</div></div>
@@ -278,8 +289,46 @@ async function loadControls(){
     pre('Plug-in registry (routing.yaml)', c.routes) + pre('Model tiers (gateway)', c.tiers) + pre('Tool allow-lists (there is no merge tool)', c.tool_allow_lists);
 }
 
+// ------------------------------------------------ replay ------------------------------------------------
+const rp = {events: [], i: 0, speed: 1, vt: 0, last: 0, timer: null};
+function replayTick(){
+  const now = performance.now(); rp.vt += (now - rp.last) * rp.speed; rp.last = now;
+  while (rp.i < rp.events.length && Date.parse(rp.events[rp.i].ts) <= rp.vt) handle(rp.events[rp.i++]);
+  $('#rpPos').textContent = `${rp.i}/${rp.events.length} events`;
+  if (rp.i < rp.events.length) rp.timer = setTimeout(replayTick, 40);
+  else { $('#rpPos').textContent = `${rp.events.length} events · replay finished`; loadFindings(); }
+}
+function replayStart(){
+  clearTimeout(rp.timer); reset(); st.seq = 0; rp.i = 0;
+  rp.vt = Date.parse(rp.events[0].ts) - 300; rp.last = performance.now();
+  replayTick();
+}
+async function initReplay(){
+  REC = window.SECAGENT_RUN || await (await fetch(REPLAY)).json();
+  rp.events = REC.events.slice().sort((a, b) => a.seq - b.seq);
+  nowFn = () => new Date(rp.vt);
+  document.title = 'Replay of a recorded run · Security Triage & Fix Agent';
+  $('.controls').innerHTML = `<span class="chk" id="rpPos"></span>
+    <div class="seg" id="rpSpeed"><button data-s="1" class="on">1×</button><button data-s="2">2×</button></div>
+    <button class="btn primary" id="rpBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>Replay</button>`;
+  $('#rpBtn').onclick = () => { replayStart(); toast(`Replaying at ${rp.speed}×`); };
+  document.querySelectorAll('#rpSpeed button').forEach(b => b.onclick = () => {
+    rp.speed = +b.dataset.s; document.querySelectorAll('#rpSpeed button').forEach(x => x.classList.toggle('on', x === b));
+  });
+  const when = new Date(REC.run.started_at + 'Z');
+  const ist = new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'}).format(when);
+  $('#cfgLabel').innerHTML = `<b style="color:#f5b544">Replay of a recorded run</b> · recorded ${ist} IST · real timings · synthetic data`;
+  const banner = document.createElement('div');
+  banner.className = 'replay-banner';
+  banner.innerHTML = `<b>Replay of a recorded run</b> · run ${esc(REC.run.run_id.slice(0, 8))} · ${esc(REC.provider || '')} · ${Math.round(REC.duration_seconds || 0)} s recorded · no backend: actions are disabled, links go to the real PRs`;
+  document.querySelector('.runbar').before(banner);
+  loadFindings();
+  replayStart();
+}
+
 reset();
 (async () => {
+  if (REPLAY) { await initReplay(); return; }
   try { const c = await (await fetch('/api/controls')).json(); killUi(c.kill_switch); $('#cfgLabel').textContent = 'config #' + c.config.split('#')[1] + ' · synthetic data'; } catch {}
   const id = new URLSearchParams(location.search).get('run');
   if (id) connect(id);

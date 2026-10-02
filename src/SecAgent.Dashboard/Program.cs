@@ -45,6 +45,33 @@ if (cmd == "run")
     return run.Status is "awaiting_human_review" or "review_recorded" ? 0 : 2;
 }
 
+if (cmd == "export")
+{
+    // secagent export [--run <id>] [--out replay-static/run.json]: recorded run → static JSON for the no-backend replay UI.
+    var s = AgentServices.Create(repoRoot, dataRoot, sql);
+    var id = Arg("--run") is { } rid ? Guid.Parse(rid) : s.Store.Runs(50).First(r => r.Status is "awaiting_human_review" or "review_recorded").RunId;
+    var run = s.Store.GetRun(id) ?? throw new InvalidOperationException($"run {id} not found");
+    var events = s.Store.Events(id).Select(e => JsonDocument.Parse(e).RootElement.Clone()).ToList();
+    var fixes = s.Store.FixesForRun(id);
+    var export = new
+    {
+        format = "secagent-run-replay/1", exported_at = DateTime.UtcNow, note = "Replay of a recorded run. Synthetic sample repo; secret values were masked before they were recorded.",
+        run, provider = s.Cfg.Gateway.Label, duration_seconds = run.EndedAt is { } en ? (en - run.StartedAt).TotalSeconds : (double?)null,
+        events, findings = FindingsView(s), decisions = s.Store.DecisionsForRun(id), fixes, tasks = s.Store.TasksForRun(id),
+        routing = s.Store.RoutingForRun(id).Select(r => new { r.task_type, r.tier, r.chosen_model_id, r.required_quality, r.reason, r.tokens_in, r.tokens_out, r.latency_ms, r.outcome }),
+        prs = fixes.Where(f => f.PrUrl != null).Select(f => new { f.FixerType, f.PrUrl, f.Branch, f.VerificationResult }).DistinctBy(x => x.PrUrl),
+        controls = ControlsView(s),
+    };
+    var text = JsonSerializer.Serialize(export, new JsonSerializerOptions(Schema.Json) { WriteIndented = false });
+    if (s.Masker.ContainsSecret(text)) throw new InvalidOperationException("export refused: a secret pattern was found in the run data (D-08)");
+    var outPath = Path.GetFullPath(Arg("--out") ?? Path.Combine(repoRoot, "replay-static", "run.json"));
+    Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
+    File.WriteAllText(outPath, text);
+    File.WriteAllText(Path.ChangeExtension(outPath, ".js"), "window.SECAGENT_RUN = " + text + ";\n");   // lets index.html work from file:// too
+    Console.WriteLine($"exported run {id} ({events.Count} events, {fixes.Count} fix attempts) → {outPath}");
+    return 0;
+}
+
 // ------------------------------------------------ dashboard ------------------------------------------------
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = Path.Combine(repoRoot, "src", "SecAgent.Dashboard", "wwwroot") });
 builder.Logging.SetMinimumLevel(LogLevel.Warning);
@@ -96,19 +123,8 @@ app.MapGet("/api/runs/{id:guid}/detail", (Guid id) => Results.Json(new
     run = svc.Store.GetRun(id), fixes = svc.Store.FixesForRun(id), tasks = svc.Store.TasksForRun(id), decisions = svc.Store.DecisionsForRun(id),
     routing = svc.Store.RoutingForRun(id), packs = svc.Store.PacksForRun(id),
 }, json));
-app.MapGet("/api/findings", () => Results.Json(svc.Store.ListFindings().Select(f => new
-{
-    f.FindingId, f.IssueType, f.Title, f.SourceScanner, f.ScannerRuleId, f.SeverityScanner, f.SeverityEffective, f.Status, f.Bucket, f.FilePath, f.ComponentName,
-    f.ComponentVersion, f.FixedVersion, f.CveIds, f.LicenceId, f.Fingerprint, f.InjectionFlag, f.FirstSeen, f.LastSeen, f.OccurrenceCount,
-    scope = f.Attributes.GetValueOrDefault("scope") ?? "pr", decision = svc.Store.LatestDecision(f.FindingId),
-    fixes = svc.Store.FixesForFinding(f.FindingId).Select(x => new { x.AttemptNo, x.VerificationResult, x.PrUrl, x.Branch }),
-}), json));
-app.MapGet("/api/controls", () => Results.Json(new
-{
-    kill_switch = svc.Kill.IsOn, config = svc.Cfg.Label, budgets = svc.Cfg.Policies.Budgets, thresholds = svc.Cfg.Policies.Thresholds, retries = svc.Cfg.Policies.Retries,
-    authority = svc.Cfg.Policies.Authority, routes = svc.Cfg.Routing.Routes, tiers = svc.Cfg.Gateway.Tiers.ToDictionary(t => t.Key, t => t.Value.Select(d => d.Model)),
-    tool_allow_lists = svc.Cfg.Routing.Agents,
-}, json));
+app.MapGet("/api/findings", () => Results.Json(FindingsView(svc), json));
+app.MapGet("/api/controls", () => Results.Json(ControlsView(svc), json));
 app.MapPost("/api/controls/killswitch", (Kill k) =>
 {
     svc.Kill.Set(k.On, k.By ?? "dashboard");
@@ -119,6 +135,21 @@ var port = Arg("--port") ?? Environment.GetEnvironmentVariable("SECAGENT_PORT") 
 Console.WriteLine($"Security Triage & Fix Agent dashboard on http://localhost:{port} (config {svc.Cfg.Label})");
 app.Run($"http://127.0.0.1:{port}");
 return 0;
+
+// Shared projections (API and `secagent export` use the same shapes, so the replay UI renders exactly what the live UI rendered).
+static object FindingsView(AgentServices svc) => svc.Store.ListFindings().Select(f => new
+{
+    f.FindingId, f.IssueType, f.Title, f.SourceScanner, f.ScannerRuleId, f.SeverityScanner, f.SeverityEffective, f.Status, f.Bucket, f.FilePath, f.ComponentName,
+    f.ComponentVersion, f.FixedVersion, f.CveIds, f.LicenceId, f.Fingerprint, f.InjectionFlag, f.FirstSeen, f.LastSeen, f.OccurrenceCount,
+    scope = f.Attributes.GetValueOrDefault("scope") ?? "pr", decision = svc.Store.LatestDecision(f.FindingId),
+    fixes = svc.Store.FixesForFinding(f.FindingId).Select(x => new { x.AttemptNo, x.VerificationResult, x.PrUrl, x.Branch }),
+}).ToList();
+static object ControlsView(AgentServices svc) => new
+{
+    kill_switch = svc.Kill.IsOn, config = svc.Cfg.Label, budgets = svc.Cfg.Policies.Budgets, thresholds = svc.Cfg.Policies.Thresholds, retries = svc.Cfg.Policies.Retries,
+    authority = svc.Cfg.Policies.Authority, routes = svc.Cfg.Routing.Routes, tiers = svc.Cfg.Gateway.Tiers.ToDictionary(t => t.Key, t => t.Value.Select(d => d.Model)),
+    tool_allow_lists = svc.Cfg.Routing.Agents,
+};
 
 record StartRun(string? Repo, int? Pr, bool? Fresh);
 record Review(string? Decision);
