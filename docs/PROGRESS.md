@@ -10,3 +10,5 @@ Times are IST (UTC+5:30).
   (b) qwen2.5:3b raised the fixture key's severity to high, so the AppSec suppression rule no longer matched and PR #4 was opened in error. Rules are now judged at scanner severity. **PR #4 is wrong; the user should close it.**
   (c) The 3b model proposed suppressing the committed DLL with no rule. The policy layer correctly sent it to a human; rule-pack guidance is now explicit.
   (d) The unsafe fix used `SqlParameter` 3 times, so the build failed and it went to a human after retries. Guidance is now provider-specific, with a pre-build forbidden-type check and one repair call.
+- 2026-10-02 ~21:00: **Clean end-to-end run** (9bcd4579, 8 min 25 s, 16.7k tokens): all 7 golden cases pass. Unsafe fix verified on attempt 1 (PR #5), binary removed (PR #6), fixture secret suppressed by rule (the model proposed "fix"), licence → human, PRs #2/#3 reused. 43/43 tests pass.
+  - Added: model provider switch (ollama | openai | azureopenai, key from env only, 3b-only profile), Windows-safe tool lookup, `secagent export`, replay mode, `replay-static/`.
