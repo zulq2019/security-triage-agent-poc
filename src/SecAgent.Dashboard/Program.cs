@@ -8,7 +8,7 @@ using SecAgent.Agents.Workflow;
 using SecAgent.Core;
 
 // ---------------------------------------------------------------------------------------------------------------
-// secagent serve [--port 8790]                         dashboard (live run via SSE) + API
+// secagent serve [--port 8795]                         dashboard (live run via SSE) + API
 // secagent run --repo owner/name --pr N [--fresh]      CLI run (local runner; ends at "waiting for human review")
 // secagent reset-db                                    dev only: clear the local SecAgent database (demo reset)
 // ---------------------------------------------------------------------------------------------------------------

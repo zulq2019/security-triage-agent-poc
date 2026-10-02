@@ -138,14 +138,28 @@ public sealed class UnsafeCodeFixer(AgentServices s) : IFixer
         var helpers = Directory.GetFiles(Path.Combine(c.Worktree, "src"), "*.cs", SearchOption.AllDirectories)
             .SelectMany(File.ReadAllLines).Where(l => Regex.IsMatch(l, @"^\s*public (static |sealed )?(class|record|[\w<>\?]+ \w+\()")).Select(l => l.Trim()).Distinct().Take(25);
 
-        var call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, f.FindingId, null, [
+        var rp = s.Cfg.RulePacks["unsafe_code"];
+        var provider = rp.Providers.FirstOrDefault(kv => usings.Any(u => u.Contains(kv.Key)));
+        var providerText = provider.Value?.Guidance ?? "Database library: see the file usings.";
+        List<ComponentInput> Inputs(string? repairNote) => [
             new("finding", $"finding:{f.FindingId}", LlmStep.FindingJson(f) + $"\nclass: {className}  method: {symbol}  namespace: {ns}"),
             new("code_snippet", f.CodeSnippetRef ?? $"file:{f.FilePath}#{symbol}", method),
-            new("rule_pack", $"rule-packs/unsafe_code@{s.Cfg.RulePacks["unsafe_code"].Version}", s.Cfg.RulePacks["unsafe_code"].FixGuidance + "\nFile usings:\n" + string.Join('\n', usings)),
+            new("rule_pack", $"rule-packs/unsafe_code@{rp.Version}", rp.FixGuidance + "\n" + providerText + "\nFile usings:\n" + string.Join('\n', usings)),
             new("tool_output", $"tests:{Path.GetRelativePath(c.Worktree, testDir)}", "Existing test example:\n" + Trunc(existingTest, 1800) + "\n\nPublic API in src:\n" + string.Join('\n', helpers)
-                + (c.PriorFailure != null ? "\n\nPREVIOUS ATTEMPT FAILED VERIFICATION. Fix these problems:\n" + Trunc(c.PriorFailure, 1500) : "")),
+                + (c.PriorFailure != null ? "\n\nPREVIOUS ATTEMPT FAILED VERIFICATION. Fix these problems:\n" + Trunc(c.PriorFailure, 1500) : "")
+                + (repairNote != null ? "\n\nYOUR PREVIOUS OUTPUT WAS REJECTED BEFORE BUILD: " + repairNote : "")),
             new("run_summary", $"run:{c.RunId}", $"PR #{c.Run.Pr.Number}; attempt {c.AttemptNo}"),
-        ], new CallSpec("fix", "fix-unsafe-code-output", f.SeverityEffective ?? f.SeverityScanner, c.AttemptNo), c.Ct);
+        ];
+        var spec = new CallSpec("fix", "fix-unsafe-code-output", f.SeverityEffective ?? f.SeverityScanner, c.AttemptNo);
+        var call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, f.FindingId, null, Inputs(null), spec, c.Ct);
+        // Deterministic pre-build check (rules-as-code): types from another database provider cannot compile here.
+        string? Forbidden(LlmCall x) => provider.Value?.Forbid.FirstOrDefault(t => (FixUtil.Str(x.Json, "method_code") + FixUtil.Str(x.Json, "test_code")).Contains(t));
+        if (Forbidden(call) is { } bad)
+        {
+            await s.Tools.RunAsync(Id, "code.snippet", $"pre-build check: '{bad}' is not in {provider.Key} → one repair call", c.Feed, c.EntryId, () => Task.FromResult(false), c.Ct, _ => false);
+            call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, f.FindingId, null,
+                Inputs($"it used '{bad}', which does not exist in {provider.Key}. {providerText}"), spec, c.Ct);
+        }
 
         var newMethod = string.Join('\n', FixUtil.Str(call.Json, "method_code").Replace("\r", "").Split('\n').Where(l => !l.Contains("secagent:")));
         var testCode = FixUtil.Str(call.Json, "test_code").Replace("\r", "");

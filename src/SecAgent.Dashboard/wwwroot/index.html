@@ -39,7 +39,9 @@ a{color:inherit}
 /* ---------- run header ---------- */
 .runbar{flex:none;margin:16px 20px 0;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
   display:flex;align-items:center;padding:14px 18px;gap:22px}
-.run-title{display:flex;flex-direction:column;gap:3px;min-width:0}
+.run-title{display:flex;flex-direction:column;gap:3px;min-width:0;flex:0 1 auto;overflow:hidden}
+#rTitle{overflow:hidden;text-overflow:ellipsis;min-width:0}
+#runPill{flex:none}
 .run-title h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.015em;color:var(--navy);white-space:nowrap;display:flex;align-items:center;gap:10px}
 .run-title h1 .dot{color:var(--ink-4);font-weight:400}
 .run-title .sub{color:var(--ink-3);font-size:12px;white-space:nowrap}
@@ -193,7 +195,8 @@ a{color:inherit}
 .statusline.done .sl-text{color:var(--amber)}
 
 /* right column */
-.side{display:flex;flex-direction:column;gap:14px;min-height:0;overflow:hidden}
+.side{display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.side > .card{flex:none}
 .side .card-h{padding:11px 14px 9px}
 .counts{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px 12px}
 .cnt{border-radius:10px;padding:8px 11px;border:1px solid var(--line-2);display:flex;flex-direction:column;gap:0}

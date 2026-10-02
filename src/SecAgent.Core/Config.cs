@@ -82,6 +82,7 @@ public sealed class RulePack
     public string FixGuidance { get; set; } = "";
     public Dictionary<string, object> Detect { get; set; } = [];
     public Dictionary<string, object> Policy { get; set; } = [];
+    public Dictionary<string, ProviderRule> Providers { get; set; } = [];
     [YamlIgnore] public string Directory { get; set; } = "";
     [YamlIgnore] public string RawYaml { get; set; } = "";
     public string Ref => $"{Id}@{Version}";
@@ -95,6 +96,8 @@ public sealed class RulePack
     public List<string> GetList(Dictionary<string, object> d, string key) =>
         d.TryGetValue(key, out var v) && v is List<object> l ? l.Select(x => x?.ToString() ?? "").ToList() : [];
 }
+public sealed class ProviderRule { public string Guidance { get; set; } = ""; public List<string> Forbid { get; set; } = []; }
+
 public sealed class SuppressionRule
 {
     public string Id { get; set; } = ""; public string Description { get; set; } = "";

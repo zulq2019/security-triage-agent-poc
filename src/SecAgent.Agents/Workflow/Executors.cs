@@ -190,6 +190,18 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
             null, ["pr", $"PR #{pr.Number}"]);
         Feed.Detail(e, new { type = "pr", num = pr.Number, url = pr.Url, title = pr.Title });
         Feed.Publish("pr", new { num = pr.Number, url = pr.Url, title = pr.Title, add = fix.Additions, del = fix.Deletions, files = fix.FilesChanged, status = "Awaiting review", reused, verified = true });
+        PublishFixerDone(m.FixerId);
+    }
+
+    /// <summary>When every group of a fixer has an outcome, show the fixer as done with its PR numbers.</summary>
+    void PublishFixerDone(string fixerId)
+    {
+        var mine = R.Groups.Values.Where(x => x.FixerId == fixerId).ToList();
+        if (mine.Any(x => x.Outcome == "pending")) return;
+        var prs = mine.Where(x => x.PrNumber != null).Select(x => $"#{x.PrNumber}").ToList();
+        var human = mine.Count(x => x.Outcome == "needs_human");
+        if (prs.Count == 0) return;
+        Feed.Agent(FixerUi(fixerId), "done", $"Verified · PR {string.Join(", ", prs)}" + (human > 0 ? $" · {human} to human" : ""), R.AgentTokens.GetValueOrDefault(FixerUi(fixerId)));
     }
 
     string PrTitle(string fixerId, List<Finding> fs, FixAttempt fix)
@@ -369,7 +381,11 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
             if (f.IssueType == IssueTypes.Secret && S.Cfg.Policies.Authority.NeverLowerSecretSeverity && Schema.Rank(sev) < Schema.Rank(f.SeverityScanner))
             { notes.Add($"secret severity not lowered below scanner severity ({sev} → {f.SeverityScanner})"); sev = f.SeverityScanner; }
             var thresholds = S.Cfg.Policies.Thresholds;
-            var ruleOk = hints.Count > 0 && Schema.Rank(sev) <= Schema.Rank(hints.Min(h => h.MaxSeverity) ?? "info") && S.Cfg.Policies.Authority.AgentMaySuppress.Contains(sev);
+            // AppSec-approved rules are written against the scanner's normalised severity; a model-raised severity does not un-match them.
+            var ruleSev = f.SeverityScanner;
+            var ruleOk = hints.Count > 0 && Schema.Rank(ruleSev) <= Schema.Rank(hints.Min(h => h.MaxSeverity) ?? "info") && S.Cfg.Policies.Authority.AgentMaySuppress.Contains(ruleSev);
+            if (ruleOk && proposed != "suppress" && Schema.Rank(sev) > Schema.Rank(ruleSev))
+            { notes.Add($"model raised severity {ruleSev} → {sev} without rule evidence; rule evaluated at scanner severity"); sev = ruleSev; }
             decision = proposed switch
             {
                 not "suppress" when ruleOk => Note(notes, "suppress", $"AppSec-approved suppression rule matched with evidence (model proposed '{proposed}') → suppressed by rule pack {rp.Ref}"),
