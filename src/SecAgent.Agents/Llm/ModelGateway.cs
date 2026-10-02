@@ -50,7 +50,13 @@ public sealed class ModelGateway
         lock (_clients)
         {
             if (_clients.TryGetValue(d.Id, out var c)) return c;
-            var key = Environment.GetEnvironmentVariable(_cfg.Gateway.ApiKeyEnv) ?? "ollama";
+            var key = Environment.GetEnvironmentVariable(_cfg.Gateway.ApiKeyEnv);
+            if (string.IsNullOrEmpty(key))
+            {
+                if (_cfg.Gateway.Provider is "openai" or "azureopenai")
+                    throw new ModelUnavailableException($"Environment variable {_cfg.Gateway.ApiKeyEnv} is not set (the API key is read only from the environment)");
+                key = "ollama";   // Ollama ignores the key
+            }
             var oc = new OpenAIClient(new ApiKeyCredential(key), new OpenAIClientOptions
             {
                 Endpoint = new Uri(_cfg.Gateway.Endpoint), NetworkTimeout = TimeSpan.FromSeconds(_cfg.Gateway.RequestTimeoutSeconds),
@@ -63,6 +69,8 @@ public sealed class ModelGateway
 
     async Task<HashSet<string>> AvailableModelsAsync(CancellationToken ct)
     {
+        if (string.IsNullOrEmpty(_cfg.Gateway.HealthUrl))   // hosted provider: no model list probe; the circuit breaker handles failures
+            return _cfg.Gateway.Tiers.Values.SelectMany(t => t).Select(d => d.Model).ToHashSet();
         if (DateTime.UtcNow - _health.At < TimeSpan.FromSeconds(30)) return _health.Models;
         try
         {
@@ -183,7 +191,7 @@ public sealed class ModelGateway
             Name = pack.AgentId,
             ChatOptions = new ChatOptions
             {
-                Temperature = 0, Seed = 42, MaxOutputTokens = _cfg.Gateway.OutputReserveTokens,
+                Temperature = _cfg.Gateway.SendTemperature ? 0 : null, Seed = _cfg.Gateway.SendSeed ? 42 : null, MaxOutputTokens = _cfg.Gateway.OutputReserveTokens,
                 ResponseFormat = ChatResponseFormat.ForJsonSchema(schema, spec.SchemaName.Replace("-", "_"), "SecAgent " + spec.SchemaName),
             },
         });

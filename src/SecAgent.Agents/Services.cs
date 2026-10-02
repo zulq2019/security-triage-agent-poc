@@ -27,7 +27,8 @@ public sealed class AgentServices
 
     public static AgentServices Create(string repoRoot, string dataRoot, string sqlConnection)
     {
-        var cfg = ConfigSnapshot.Load(Path.Combine(repoRoot, "rules"));
+        var provider = ModelProviderSettings.Load(repoRoot);
+        var cfg = ConfigSnapshot.Load(Path.Combine(repoRoot, "rules"), provider);
         var store = new SqlStore(sqlConnection);
         store.EnsureSchema(Path.Combine(repoRoot, "db", "schema.sql"));
         var masker = new SecretMasker();

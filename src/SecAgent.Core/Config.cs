@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
 using YamlDotNet.Serialization;
@@ -30,6 +31,8 @@ public sealed class GatewayConfig
     public int OutputReserveTokens { get; set; } = 1024;
     public int MaxConcurrentCalls { get; set; } = 1;
     public int RequestTimeoutSeconds { get; set; } = 600;
+    public bool SendTemperature { get; set; } = true;   // reasoning-family hosted models reject temperature
+    public bool SendSeed { get; set; } = true;
     public Dictionary<string, List<DeploymentConfig>> Tiers { get; set; } = [];
     public List<string> TierOrder { get; set; } = [];
     public Dictionary<string, string> TaskTiers { get; set; } = [];
@@ -129,7 +132,7 @@ public sealed class ConfigSnapshot
         Routing.Routes.TryGetValue(issueType, out var r) && RulePacks.TryGetValue(r.RulePack, out var rp) ? rp
         : throw new InvalidOperationException($"No rule pack registered for issue type '{issueType}'");
 
-    public static ConfigSnapshot Load(string rulesRoot)
+    public static ConfigSnapshot Load(string rulesRoot, ModelProviderSettings? provider = null)
     {
         var de = new DeserializerBuilder().WithNamingConvention(UnderscoredNamingConvention.Instance).IgnoreUnmatchedProperties().Build();
         var sha = SHA256.Create();
@@ -170,6 +173,11 @@ public sealed class ConfigSnapshot
         var gateway = Y<GatewayConfig>("gateway/models.yaml");
         var context = Y<ContextConfig>("gateway/context.yaml");
         var routing = Y<RoutingConfig>("routing/routing.yaml");
+        if (provider != null)
+        {
+            provider.ApplyTo(gateway);   // provider switch is part of the hashed snapshot (never the key itself)
+            all.Append("provider\n").Append(JsonSerializer.Serialize(gateway.Tiers)).Append(gateway.Endpoint).Append(gateway.ApiKeyEnv);
+        }
         var hash = Convert.ToHexStringLower(sha.ComputeHash(Encoding.UTF8.GetBytes(all.ToString())));
         return new ConfigSnapshot
         {

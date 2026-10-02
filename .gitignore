@@ -6,3 +6,5 @@ obj/
 TestResults/
 node_modules/
 .env.local
+appsettings.Local.json
+*.env
