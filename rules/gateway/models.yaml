@@ -1,0 +1,30 @@
+# Model gateway routing config (section 6.7). Local Ollama via its OpenAI-compatible endpoint.
+# Switching to Azure OpenAI / APIM = change provider/endpoint/deployments here (FR-34), no code change.
+label: gateway-2026-10-02.1
+provider: openai_compatible
+endpoint: http://localhost:11434/v1
+api_key_env: OLLAMA_API_KEY        # Ollama ignores the key; Azure would use Entra ID via APIM
+health_url: http://localhost:11434/api/tags
+output_reserve_tokens: 1024
+max_concurrent_calls: 1             # CPU-only box: serialise inference
+request_timeout_seconds: 600
+tiers:
+  small:
+    - { id: small-a, model: "qwen2.5:3b", version: "357c53fb659c", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0 }
+    - { id: small-b, model: "qwen2.5-coder:3b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0, fallback: true }
+  strong:
+    - { id: strong-a, model: "qwen2.5-coder:7b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0 }
+    - { id: strong-b, model: "qwen2.5-coder:3b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0, fallback: true, note: "local stand-in for deployment B" }
+tier_order: [small, strong]
+task_tiers:
+  triage: small
+  verify: small
+  summarise: small
+  fix: strong
+quality_rules:
+  high_if_severity: [critical, high]
+  high_if_retry: true
+  high_if_confidence_below: 0.6
+latency_targets_ms:
+  pr: 120000
+  backlog: 900000

@@ -1,0 +1,15 @@
+id: binary_artefact
+version: 1.0.0
+issue_types: [binary_artefact]
+prompt: triage
+detect:
+  extensions: [.dll, .exe, .so, .dylib, .jar, .class, .nupkg, .pdb, .zip]
+  magic: ["4D5A", "7F454C46", "CAFEBABE", "504B0304"]   # PE, ELF, Java class, ZIP/JAR/NUPKG
+  allow_paths: ["**/wwwroot/**/*.ico"]
+  severity: medium
+suppression_rules: []
+bucket_rules:
+  fix_now: [critical, high, medium]
+  fix_batch: [low, info]
+guidance: |
+  - Committed build outputs / vendored binaries cannot be reviewed or scanned for provenance: remove them, add an ignore rule and consume from an artefact feed (Azure Artifacts).

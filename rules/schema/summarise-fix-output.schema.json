@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "secagent/summarise-fix-output/1.0.0",
+  "type": "object",
+  "properties": {
+    "what_was_wrong": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "what_changed": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "risk": {
+      "type": "string",
+      "maxLength": 300
+    }
+  },
+  "required": [
+    "what_was_wrong",
+    "what_changed",
+    "risk"
+  ],
+  "additionalProperties": false
+}

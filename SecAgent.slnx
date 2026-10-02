@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SecAgent.Agents/SecAgent.Agents.csproj" />
+    <Project Path="src/SecAgent.Core/SecAgent.Core.csproj" />
+    <Project Path="src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SecAgent.Tests/SecAgent.Tests.csproj" />
+  </Folder>
+</Solution>

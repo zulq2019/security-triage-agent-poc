@@ -1,0 +1,12 @@
+id: vulnerable_dependency
+version: 1.0.0
+issue_types: [vulnerable_dependency]
+prompt: triage
+suppression_rules: []
+bucket_rules:
+  fix_now: [critical, high]
+  fix_batch: [medium, low, info]
+guidance: |
+  - A direct dependency with a known CVE and a published fixed version is a real issue: propose fix.
+  - If no fixed version exists, propose accept (accept_defer) with reason; a named human must approve.
+  - Reachability is unknown in slice 1 unless stated: do not lower severity on assumption.

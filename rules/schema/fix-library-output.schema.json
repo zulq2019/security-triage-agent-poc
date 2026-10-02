@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "secagent/fix-library-output/1.0.0",
+  "type": "object",
+  "properties": {
+    "breaking_change_risk": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "reviewer_note": {
+      "type": "string",
+      "maxLength": 500
+    }
+  },
+  "required": [
+    "breaking_change_risk",
+    "reviewer_note"
+  ],
+  "additionalProperties": false
+}

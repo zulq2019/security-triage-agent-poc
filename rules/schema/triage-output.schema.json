@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "secagent/triage-output/1.0.0",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "fix",
+        "suppress",
+        "accept",
+        "escalate"
+      ]
+    },
+    "severity_effective": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 400
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "decision",
+    "severity_effective",
+    "reason",
+    "confidence"
+  ],
+  "additionalProperties": false
+}

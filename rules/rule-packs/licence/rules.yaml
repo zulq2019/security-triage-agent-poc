@@ -1,0 +1,17 @@
+id: licence
+version: 1.0.0
+issue_types: [licence]
+prompt: triage
+policy:
+  app_licence: proprietary
+  denied: ["GPL-2.0", "GPL-2.0-only", "GPL-3.0", "GPL-3.0-only", "GPL-3.0-or-later", "AGPL-3.0", "AGPL-3.0-only"]
+  review: ["LGPL-2.1", "LGPL-3.0", "MPL-2.0", "EPL-2.0"]
+  allowed: ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "MS-PL", "ISC", "Zlib"]
+  decision_authority: human     # licence exceptions / replacements need AppSec / legal (section 8.3)
+suppression_rules: []
+bucket_rules:
+  fix_now: [critical, high]
+  fix_batch: [medium, low, info]
+guidance: |
+  - Copyleft (GPL/AGPL) code vendored into a proprietary application is a licence clash: real issue.
+  - The agent may propose permissive alternatives but must not change licensing itself; a human decides.
