@@ -707,6 +707,8 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         Feed.Agent("verifier", active ? "running" : "done", active ? "Waiting for retried fix…" : $"{R.Fixes.Values.Count(f => f.VerificationResult == "passed")} verified", R.AgentTokens.GetValueOrDefault("verifier"));
     }
 
+    static readonly SemaphoreSlim HeavySlots = new(Math.Max(1, int.TryParse(Environment.GetEnvironmentVariable("SECAGENT_VERIFY_PARALLEL"), out var n) ? n : 2));
+
     async Task<object?> VerifyAsync(FixProduced p)
     {
         object? result = null;
@@ -723,12 +725,19 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         var e = Feed.Entry("verifier", $"verifying {name} patch {Short(fix.CommitSha ?? "")} on {p.Branch}");
         var t = new ScanTarget(RunId, $"verify-{p.FixerId}-{Short(p.GroupKey)}-a{p.AttemptNo}", p.Worktree, R.Pr.Repo, p.Branch, fix.CommitSha ?? "", null);
         var ids = new ConcurrentDictionary<string, string>();
-        var scanTask = S.Scanners.ScanAsync(t, Ct,
-            (id, _) => ids[id] = Feed.ToolStart(e, "scan." + id, "fix branch"),
-            (id, raw, n) => Feed.ToolEnd(e, ids[id], "scan." + id, $"fix branch · {n} finding{(n == 1 ? "" : "s")}", true, raw.ElapsedMs));
-        var testTask = RunTestsAsync(p, e);
-        var set = await scanTask;
-        var tests = await testTask;
+        // Rescans + builds are memory-heavy next to a resident local model; cap how many verifications run at once.
+        await HeavySlots.WaitAsync(Ct);
+        ScanSet set; TestResult tests;
+        try
+        {
+            var scanTask = S.Scanners.ScanAsync(t, Ct,
+                (id, _) => ids[id] = Feed.ToolStart(e, "scan." + id, "fix branch"),
+                (id, raw, n) => Feed.ToolEnd(e, ids[id], "scan." + id, $"fix branch · {n} finding{(n == 1 ? "" : "s")}", true, raw.ElapsedMs));
+            var testTask = RunTestsAsync(p, e);
+            set = await scanTask;
+            tests = await testTask;
+        }
+        finally { HeavySlots.Release(); }
 
         // Target gone? (match keys survive line moves and code edits)
         static string MatchKey(Finding f) => f.IssueType switch
@@ -805,7 +814,7 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         var resultsDir = Path.Combine(p.Worktree, ".secagent-test");
         var sln = Directory.GetFiles(p.Worktree, "*.slnx").Concat(Directory.GetFiles(p.Worktree, "*.sln")).FirstOrDefault() ?? p.Worktree;
         var r = await S.Tools.RunAsync("verifier", "dotnet.test", $"{Path.GetFileName(sln)} · trx", Feed, entry,
-            () => Proc.RunAsync(Proc.Which("dotnet"), ["test", sln, "--logger", "trx;LogFileName=results.trx", "--results-directory", resultsDir, "-nologo"], p.Worktree, Ct, timeoutSeconds: 600), Ct,
+            () => Proc.RunAsync(Proc.Which("dotnet"), ["test", sln, "--logger", "trx;LogFileName=results.trx", "--results-directory", resultsDir, "-nologo", "--disable-build-servers"], p.Worktree, Ct, timeoutSeconds: 600), Ct,
             x => x.ExitCode == 0);
         var trx = Path.Combine(resultsDir, "results.trx");
         int total = 0, passed = 0, failed = 0; string fails = "";
