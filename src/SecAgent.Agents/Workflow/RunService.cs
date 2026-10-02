@@ -71,7 +71,9 @@ public sealed class RunService(AgentServices s)
             BudgetJson = JsonSerializer.Serialize(budgetCfg, Schema.Json), ConfigSnapshot = s.Cfg.Label,
         };
         s.Store.InsertRun(run);
-        var state = new RunState { Run = run, Pr = pr, Feed = new Feed(s.Bus, run.RunId), Budget = new RunBudget(budgetCfg.Tokens, budgetCfg.Cost), FreshTriage = fresh };
+        var limits = RunLimits.From(budgetCfg);
+        var state = new RunState { Run = run, Pr = pr, Feed = new Feed(s.Bus, run.RunId), Budget = new RunBudget(limits.Tokens, limits.Cost), FreshTriage = fresh, Limits = limits };
+        state.Deadline = new RunDeadline(limits.TimeLimit, () => { OnTimeBudgetSpent(state); return Task.CompletedTask; });
         RunRegistry.Add(state);
         var h = new Handle { State = state };
         Handles[run.RunId] = h;
@@ -80,12 +82,26 @@ public sealed class RunService(AgentServices s)
         return h;
     }
 
+    /// <summary>max_minutes reached. Runs while holding the push gate (no push / PR creation is half-done), records the stop,
+    /// then cancels routing and execution. The last workflow checkpoint stays on disk.</summary>
+    void OnTimeBudgetSpent(RunState st)
+    {
+        lock (st.Lock)
+        {
+            if (st.StopReason != null || st.Finished || st.Run.Status != "running") return;
+            st.StopReason = "budget"; st.StopDetail = $"{RunLimits.MaxMinutesReason} ({st.Limits.MaxMinutes} min)";
+        }
+        st.Feed.Publish("guards", new { time_up = true, max_minutes = st.Limits.MaxMinutes, max_fixes = st.Limits.MaxFixes, deferred = st.FixesDeferred, event_reason = RunLimits.MaxMinutesReason });
+        st.Feed.Entry("orch", $"{RunLimits.MaxMinutesReason}: run hit its {st.Limits.MaxMinutes}-minute time budget — routing and fixing stopped; no push was in flight; last checkpoint kept", "fail", ["fail", "Budget"]);
+        st.Cts.Cancel();
+    }
+
     object RunInfo(RunState st, string status) => new
     {
         run_id = st.Run.RunId, status, repo = st.Pr.Repo, pr = st.Pr.Number, title = st.Pr.Title, url = st.Pr.Url, head_ref = st.Pr.HeadRef, base_ref = st.Pr.BaseRef,
         files = st.Pr.FilesChanged, started = st.Run.StartedAt, ended = st.Run.EndedAt, budget = st.Budget.Tokens, used = st.Budget.Used, config = s.Cfg.Label,
         stop = st.StopReason, stop_detail = st.StopDetail, elapsed_s = st.Run.EndedAt != null ? (st.Run.EndedAt.Value - st.Run.StartedAt).TotalSeconds : (double?)null,
-        prs = st.PrUrls.Distinct().ToList(), fresh = st.FreshTriage,
+        prs = st.PrUrls.Distinct().ToList(), fresh = st.FreshTriage, max_fixes = st.Limits.MaxFixes, max_minutes = st.Limits.MaxMinutes,
     };
 
     async Task ExecuteAsync(Handle h, bool blockForReview)
@@ -152,6 +168,7 @@ public sealed class RunService(AgentServices s)
             Finish(st, status, sw.Elapsed, checkpoints);
         }
         else if (st.Run.Status == "running") Finish(st, "completed", sw.Elapsed, checkpoints);
+        if (st.Run.Status != "awaiting_human_review") st.Deadline.Dispose();
     }
 
     void Finish(RunState st, string status, TimeSpan elapsed, int checkpoints)
@@ -166,6 +183,7 @@ public sealed class RunService(AgentServices s)
             statuses = fs.GroupBy(f => f.Status).ToDictionary(g => g.Key, g => g.Count()), prs_opened = st.PrsOpened, prs_reused = st.PrsReused,
             pr_urls = st.PrUrls.Distinct(), retries = st.RetriesUsed, injections = st.Injections, masked = s.Masker.MaskCount, tokens = st.Budget.Used,
             agent_tokens = st.AgentTokens, stop = st.StopReason, stop_detail = st.StopDetail,
+            limits = new { max_fixes = st.Limits.MaxFixes, max_minutes = st.Limits.MaxMinutes, fixes_dispatched = st.FixesDispatched, fixes_deferred = st.FixesDeferred },
         }, Schema.Json);
         s.Store.UpdateRun(st.Run);
         st.Feed.Publish("run", RunInfo(st, status switch { "awaiting_human_review" => "waiting", _ => status }));

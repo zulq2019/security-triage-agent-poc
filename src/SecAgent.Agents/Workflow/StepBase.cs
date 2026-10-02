@@ -71,6 +71,7 @@ public abstract class StepBase(string id, AgentServices s, RunState r) : Executo
     {
         masked = S.Masker.MaskCount, injections = R.Injections, retries = R.RetriesUsed, max_retries = S.Cfg.Policies.Retries.MaxFixRetries,
         budget_used = R.Budget.Used, budget = R.Budget.Tokens, kill = S.Kill.IsOn,
+        max_fixes = R.Limits.MaxFixes, fixes_dispatched = R.FixesDispatched, deferred = R.FixesDeferred, max_minutes = R.Limits.MaxMinutes, time_up = R.Deadline.Expired,
     });
 
     protected static string Short(string s, int n = 8) => s.Length <= n ? s : s[..n];

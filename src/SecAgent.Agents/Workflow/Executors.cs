@@ -191,13 +191,26 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         {
             if (!reused)
             {
-                // A remote branch without an open PR (e.g. an earlier crashed run) is never overwritten: push under a run-suffixed name instead.
-                if (await GitWorkspace.RemoteBranchExistsAsync(m.Worktree, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
-                await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct, branch), Ct);
-                var title = PrTitle(m.FixerId, findings, fix);
-                var body = PrBody(m, g, findings, fix);
-                pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={branch}", Feed, e,
-                    () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false), Ct), Ct);
+                // max_minutes: push + PR creation happen inside the run's push gate, so the time budget can never stop the run
+                // half-way through them; once the budget is spent no new push starts.
+                if (!await R.Deadline.TryEnterPushAsync(Ct))
+                {
+                    S.Store.LedgerFail(key, RunLimits.MaxMinutesReason);
+                    Feed.Update(e, "orch", $"{RunLimits.MaxMinutesReason}: time budget spent before pushing {m.Branch} · not pushed", "fail", ["fail", "Budget"]);
+                    g.Outcome = "needs_human";
+                    return;
+                }
+                try
+                {
+                    // A remote branch without an open PR (e.g. an earlier crashed run) is never overwritten: push under a run-suffixed name instead.
+                    if (await GitWorkspace.RemoteBranchExistsAsync(m.Worktree, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
+                    await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct, branch), Ct);
+                    var title = PrTitle(m.FixerId, findings, fix);
+                    var body = PrBody(m, g, findings, fix);
+                    pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={branch}", Feed, e,
+                        () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false), Ct), Ct);
+                }
+                finally { R.Deadline.ExitPush(); }
             }
             S.Store.LedgerComplete(key, pr!.Url);
         }
@@ -609,6 +622,7 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
         }
         await S.Tools.RunAsync("router", "registry.read", string.Join(" · ", groups.Values.Select(g => $"{TriageExecutor.Label(R.Findings[g.FindingIds[0]]).Split(' ')[0]}→{FixerUi(g.FixerId)}")), Feed, e, () => Task.FromResult(true), Ct);
         var send = new List<object>();
+        var toFix = new List<GroupInfo>();
         foreach (var g in groups.Values)
         {
             R.Groups[g.Key] = g;
@@ -635,9 +649,32 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
                 send.Add(new FixClosed(RunId, g.FixerId, g.Key, g.FindingIds, "pr_reused", g.PrUrl, "ledger"));
                 continue;
             }
+            toFix.Add(g);
+        }
+        // max_fixes: dispatch at most N fix groups (highest severity first, the triage order); the rest go to a human.
+        var (dispatch, deferred) = R.Limits.SplitFixes(toFix);
+        foreach (var g in dispatch)
+        {
             foreach (var id in g.FindingIds) Move(R.Findings[id], Status.FixQueued, "route", "router");
             send.Add(new FixTask(RunId, g.FixerId, g.Key, g.FindingIds, 1, null));
         }
+        foreach (var g in deferred)
+        {
+            var fs = g.FindingIds.Select(id => R.Findings[id]).ToList();
+            foreach (var f in fs) Move(f, Status.NeedsHuman, RunLimits.MaxFixesReason, "router");
+            S.Store.InsertTask(new HumanTask { RunId = RunId, Type = "budget_deferred", Title = $"Fix deferred ({RunLimits.MaxFixesReason} {R.Limits.MaxFixes}): {TriageExecutor.Label(fs[0])}",
+                Details = $"{RunLimits.MaxFixesReason}: this run may dispatch at most {R.Limits.MaxFixes} fix group(s); {FixerName(g.FixerId)} group {Short(g.Key)} was not attempted. Re-run or fix manually.",
+                FindingIds = g.FindingIds, Owner = "[owner team]" });
+            g.Outcome = "needs_human";
+            send.Add(new FixClosed(RunId, g.FixerId, g.Key, g.FindingIds, "needs_human", null, RunLimits.MaxFixesReason));
+        }
+        R.FixesDispatched = dispatch.Count; R.FixesDeferred = deferred.Count;
+        if (deferred.Count > 0)
+        {
+            Feed.Entry("router", $"{RunLimits.MaxFixesReason}: {dispatch.Count} of {dispatch.Count + deferred.Count} fix groups dispatched (max_fixes {R.Limits.MaxFixes}) · {deferred.Count} deferred → NEEDS_HUMAN", "warn", ["inj", "Budget"]);
+            PublishCounts();
+        }
+        PublishGuards();
         Feed.Update(e, "router", groups.Count == 0 ? "nothing to fix" :
             $"{groups.Values.Sum(g => g.FindingIds.Count)} findings → {string.Join(", ", groups.Values.Select(g => FixerName(g.FixerId)).Distinct())}");
         await StatusAsync(ctx, "router", "done", $"{groups.Count} routed");

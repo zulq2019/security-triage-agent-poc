@@ -14,6 +14,12 @@ public sealed class RunState
     public required Feed Feed { get; init; }
     public required RunBudget Budget { get; init; }
     public required bool FreshTriage { get; init; }
+    /// <summary>tokens / cost / max_fixes / max_minutes from the "pr" budget (policies.yaml).</summary>
+    public RunLimits Limits { get; init; } = new(0, 0, 0, 0);
+    /// <summary>max_minutes deadline + push gate (set by RunService; a no-op deadline when unset, e.g. in tests).</summary>
+    public RunDeadline Deadline { get; set; } = new(null, () => Task.CompletedTask);
+    public int FixesDispatched;
+    public int FixesDeferred;
     public string HeadDir { get; set; } = "";
     public string BaseDir { get; set; } = "";
     public HashSet<string> HeadFingerprints { get; set; } = [];

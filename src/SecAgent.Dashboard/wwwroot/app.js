@@ -180,11 +180,33 @@ function guards(g){
   if (g.masked != null) $('#gMask').textContent = g.masked + ' masked';
   if (g.injections){ $('#gInj').classList.add('hit'); $('#gInjM').textContent = g.injections + ' ignored'; }
   if (g.retries != null){ $('#gRetry').textContent = `${g.retries} used`; $('#gRet').classList.toggle('hit', g.retries > 0); }
+  limitsUi(g);
   const hits = document.querySelectorAll('.g.hit').length;
   $('#gMeta').textContent = hits ? `${hits} event${hits > 1 ? 's' : ''} logged` : 'all passing';
   if (g.kill != null) killUi(g.kill);
 }
+// max_fixes / max_minutes guardrails (policies.yaml budgets). Fed by 'guards' events and run info.
+function limitsUi(g){
+  if (g.max_fixes != null){
+    $('#gFixT').textContent = `Fix cap (max_fixes ${g.max_fixes > 0 ? g.max_fixes : '∞'})`;
+    if (g.deferred != null || g.fixes_dispatched != null)
+      $('#gFixM').textContent = g.deferred > 0 ? `${g.deferred} deferred → human` : `${g.fixes_dispatched || 0} dispatched`;
+    $('#gFix').classList.toggle('hit', g.deferred > 0);
+  }
+  if (g.max_minutes != null){
+    $('#gTimeT').textContent = `Time budget (max_minutes ${g.max_minutes > 0 ? g.max_minutes : '∞'})`;
+    if (g.time_up) $('#gTimeM').textContent = 'time up · run stopped';
+    $('#gTime').classList.toggle('hit', !!g.time_up);
+  }
+  const hits = document.querySelectorAll('.g.hit').length;
+  $('#gMeta').textContent = hits ? `${hits} event${hits > 1 ? 's' : ''} logged` : 'all passing';
+}
 function runInfo(r){
+  limitsUi({max_fixes: r.max_fixes, max_minutes: r.max_minutes, time_up: r.stop_detail && String(r.stop_detail).startsWith('budget: max_minutes')});
+  if (r.max_minutes > 0 && !(r.stop_detail && String(r.stop_detail).startsWith('budget: max_minutes')) && r.started){
+    const mins = Math.round(((r.ended ? new Date(r.ended) : new Date()) - new Date(r.started)) / 60000);
+    $('#gTimeM').textContent = `${mins} of ${r.max_minutes} min`;
+  }
   st.run = r; st.budget = r.budget || st.budget;
   $('#rTitle').innerHTML = `PR #${esc(r.pr)} <span class="dot">·</span> ${esc(r.repo.split('/')[1])} <span class="dot">·</span> <span style="font-weight:500;color:var(--ink-2)">${esc(r.title)}</span>`;
   $('#rSub').innerHTML = `Run <b>${esc(String(r.run_id).slice(0,8))}</b> · branch <b>${esc(r.head_ref)}</b> → ${esc(r.base_ref)} · ${r.files} files changed · started <b>${clock(r.started)} IST</b>`;

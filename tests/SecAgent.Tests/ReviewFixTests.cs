@@ -157,3 +157,55 @@ public class LedgerRevalidationTests
         finally { s.LedgerDelete(key); }
     }
 }
+
+/// <summary>Regression (review P1): max_fixes and max_minutes from policies.yaml are enforced, not dropped at startup.</summary>
+public class RunLimitTests
+{
+    [Fact]
+    public void Configured_fix_and_time_budgets_are_carried_into_run_limits()
+    {
+        var b = TestEnv.Cfg.Policies.Budgets["pr"];
+        var l = RunLimits.From(b);
+        Assert.Equal(b.Tokens, l.Tokens);
+        Assert.Equal(b.Cost, l.Cost);
+        Assert.True(l.MaxFixes > 0);
+        Assert.Equal(b.MaxFixes, l.MaxFixes);
+        Assert.Equal(TimeSpan.FromMinutes(b.MaxMinutes), l.TimeLimit);
+    }
+
+    [Fact]
+    public void Router_split_dispatches_at_most_max_fixes_in_priority_order()
+    {
+        var (d, rest) = new RunLimits(0, 0, 2, 0).SplitFixes(new[] { "critical", "high", "medium", "low", "low2" });
+        Assert.Equal(["critical", "high"], d);
+        Assert.Equal(["medium", "low", "low2"], rest);
+        var (all, none) = new RunLimits(0, 0, 0, 0).SplitFixes(new[] { "a", "b" });   // 0 = no cap
+        Assert.Equal(2, all.Count); Assert.Empty(none);
+    }
+
+    [Fact]
+    public async Task Time_budget_waits_for_an_in_flight_push_then_stops_and_refuses_new_pushes()
+    {
+        int fired = 0;
+        using var dl = new RunDeadline(TimeSpan.FromMilliseconds(100), () => { Interlocked.Increment(ref fired); return Task.CompletedTask; });
+        Assert.True(await dl.TryEnterPushAsync(CancellationToken.None));     // a push / PR creation is in progress
+        await Task.Delay(400);
+        Assert.Equal(0, fired);                                                // deadline passed, but it never interrupts the push
+        Assert.False(dl.Expired);
+        dl.ExitPush();
+        await dl.Expiry.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, fired);
+        Assert.True(dl.Expired);
+        Assert.False(await dl.TryEnterPushAsync(CancellationToken.None));    // no new push after the time budget is spent
+    }
+
+    [Fact]
+    public async Task No_time_limit_never_expires()
+    {
+        using var dl = new RunDeadline(null, () => throw new InvalidOperationException("must not fire"));
+        await Task.Delay(150);
+        Assert.False(dl.Expired);
+        Assert.True(await dl.TryEnterPushAsync(CancellationToken.None));
+        dl.ExitPush();
+    }
+}
