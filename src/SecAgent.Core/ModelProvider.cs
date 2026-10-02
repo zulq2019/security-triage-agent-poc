@@ -36,7 +36,7 @@ public sealed class ModelProviderSettings
                 {
                     var sec = s.Providers.TryGetValue(p.Name, out var existing) ? existing : new ProviderSection();
                     var overlay = p.Value.Deserialize<ProviderSection>(Opts) ?? new();
-                    sec.Merge(overlay);
+                    sec.Overlay(overlay);
                     s.Providers[p.Name] = sec;
                 }
         }
@@ -119,7 +119,7 @@ public sealed class ProviderSection
     public decimal? StrongCostPer1kIn { get; set; }
     public decimal? StrongCostPer1kOut { get; set; }
 
-    public void Merge(ProviderSection o)
+    public void Overlay(ProviderSection o)
     {
         foreach (var p in typeof(ProviderSection).GetProperties())
             if (p.GetValue(o) is { } v) p.SetValue(this, v);

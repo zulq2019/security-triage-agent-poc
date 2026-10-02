@@ -36,7 +36,7 @@ public sealed class ScannerHub(ConfigSnapshot cfg, IEnumerable<IScannerAdapter> 
             var (uri, hash) = blob.Put("raw", $"{t.RunId}/{t.Label}/{a.Id}.json", raw.StoredContent);
             var ev = new Evidence { Type = "raw_scan", Uri = uri, Hash = hash, CreatedBy = "scanners", TraceId = Telemetry.TraceId, RelatedIds = [t.RunId] };
             store.InsertEvidence(ev);
-            foreach (var f in findings) { f.RawEvidenceRef = uri; f.CreatedByRun = t.RunId; }
+            foreach (var f in findings) { f.RawEvidenceRef = uri; f.CreatedByRun = t.RunId; f.FilePath = f.FilePath?.Replace('\\', '/'); }
             // Validate the whole batch; an invalid batch is rejected (no partial records).
             var errors = findings.Select(f => validator.ValidateFinding(f)).Where(e => e != null).ToList();
             if (errors.Count > 0) throw new InvalidDataException($"{a.Id} output failed canonical schema validation: {errors[0]}");

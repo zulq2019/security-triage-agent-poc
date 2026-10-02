@@ -22,7 +22,7 @@ public static class Hashing
 /// <summary>Fingerprints per PRD section 7.10 (no line numbers).</summary>
 public static class Fingerprints
 {
-    static string N(string? s) => (s ?? "").Trim().ToLowerInvariant();
+    static string N(string? s) => (s ?? "").Trim().Replace('\\', '/').ToLowerInvariant();   // same fingerprint on Windows and Linux
     static string H(params string?[] parts) => Hashing.Sha256(string.Join("|", parts.Select(N)));
 
     public static string VulnerableDependency(string repo, string purlName, string version, string vulnId, string manifestPath) =>

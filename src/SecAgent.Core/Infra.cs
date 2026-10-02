@@ -162,15 +162,23 @@ public static class Proc
         return new Result(p.ExitCode, await so, await se, sw.ElapsedMilliseconds);
     }
 
+    /// <summary>Finds a CLI on Linux/macOS/Windows (PATH + common user install dirs; PATHEXT on Windows).</summary>
     public static string Which(string name)
     {
-        var home = Environment.GetEnvironmentVariable("HOME") ?? "";
-        foreach (var dir in new[] { Path.Combine(home, ".local/bin"), Path.Combine(home, ".dotnet"), "/usr/local/bin", "/usr/bin" }
-                     .Concat((Environment.GetEnvironmentVariable("PATH") ?? "").Split(':')))
-        {
-            var p = Path.Combine(dir, name);
-            if (File.Exists(p)) return p;
-        }
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var exts = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT").Split(';', StringSplitOptions.RemoveEmptyEntries).Prepend("")
+            : [""];
+        var dirs = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries).ToList();
+        dirs.InsertRange(0, OperatingSystem.IsWindows()
+            ? [Path.Combine(home, ".dotnet"), Path.Combine(home, ".local", "bin")]
+            : [Path.Combine(home, ".local", "bin"), Path.Combine(home, ".dotnet"), "/usr/local/bin", "/usr/bin"]);
+        foreach (var dir in dirs)
+            foreach (var ext in exts)
+            {
+                var p = Path.Combine(dir.Trim('"'), name + ext);
+                if (File.Exists(p)) return p;
+            }
         return name;
     }
 }

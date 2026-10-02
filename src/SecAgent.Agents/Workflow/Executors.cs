@@ -529,7 +529,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
                 if (Directory.Exists(dir))
                     foreach (var file in Directory.GetFiles(dir).Order())
                         sb.AppendLine(Numbered(Path.GetRelativePath(R.HeadDir, file), 1, 8));
-                var users = Directory.GetFiles(R.HeadDir, "*.cs", SearchOption.AllDirectories).Where(p => !p.StartsWith(dir) && !p.Contains("/obj/") && File.ReadAllText(p).Contains("CsvEscaper"))
+                var users = Directory.GetFiles(R.HeadDir, "*.cs", SearchOption.AllDirectories).Where(p => !p.StartsWith(dir) && !p.Replace('\\', '/').Contains("/obj/") && File.ReadAllText(p).Contains("CsvEscaper"))
                     .Select(p => Path.GetRelativePath(R.HeadDir, p)).ToList();
                 sb.AppendLine("used by: " + (users.Count > 0 ? string.Join(", ", users) : "none"));
                 return sb.ToString();
@@ -849,7 +849,7 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         var buildFailed = r.ExitCode != 0 && total == 0;
         if (buildFailed)
             fails = string.Join("\n", (r.StdOut + "\n" + r.StdErr).Split('\n').Where(l => l.Contains(": error ")).Select(l => l.Trim()).Distinct().Take(6));
-        fails = System.Text.RegularExpressions.Regex.Replace(fails.Replace(p.Worktree + "/", ""), @"\s*\[[^\]]+\.csproj\]", "");
+        fails = System.Text.RegularExpressions.Regex.Replace(fails.Replace(p.Worktree + Path.DirectorySeparatorChar, "").Replace(p.Worktree + "/", ""), @"\s*\[[^\]]+\.csproj\]", "");
         return new TestResult(r.ExitCode == 0 && failed == 0 && total > 0, buildFailed, total, passed, failed, r.ElapsedMs / 1000.0, S.Masker.Mask(fails, false), uri, hash);
     }
 
