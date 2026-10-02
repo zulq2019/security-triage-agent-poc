@@ -69,3 +69,50 @@ public class ForkPrFetchTests : IDisposable
 
     public void Dispose() { try { Directory.Delete(_root, true); } catch { } }
 }
+
+/// <summary>Regression (review P1): fix group / ledger identity must be scoped by repository and target PR/ref.</summary>
+public class ScopedFixKeyTests
+{
+    static Finding Dep(string repo = "a/one") => new() { IssueType = IssueTypes.VulnerableDependency, ComponentName = "pkg:nuget/Newtonsoft.Json", ComponentVersion = "12.0.1", Repo = repo, Fingerprint = new string('f', 64) };
+
+    [Fact]
+    public void Same_dependency_in_two_repos_or_two_prs_gets_different_keys()
+    {
+        var a = FixKeys.Group(Dep(), "a/one", 1, "feature/x");
+        Assert.NotEqual(a, FixKeys.Group(Dep(), "b/two", 1, "feature/x"));   // other repo
+        Assert.NotEqual(a, FixKeys.Group(Dep(), "a/one", 2, "feature/x"));   // other PR
+        Assert.NotEqual(a, FixKeys.Group(Dep(), "a/one", 1, "feature/y"));   // other target ref
+        Assert.Equal(a, FixKeys.Group(Dep(), "A/One", 1, "feature/x"));      // repo names are case-insensitive on GitHub
+        Assert.Equal(64, a.Length);                                           // fits fix_group_key NVARCHAR(64)
+    }
+
+    [Fact]
+    public void Legacy_key_formula_is_unchanged_for_migration()
+    {
+        Assert.Equal(Hashing.Sha256("fix_group|pkg:nuget/Newtonsoft.Json|12.0.1"), FixKeys.Legacy(Dep()));
+        var secret = new Finding { IssueType = IssueTypes.Secret, Fingerprint = new string('e', 64) };
+        Assert.Equal(secret.Fingerprint, FixKeys.Legacy(secret));
+    }
+
+    [Fact]
+    public void Shared_ledger_legacy_entry_is_not_reused_by_another_repo_and_is_migrated_for_its_own()
+    {
+        var s = TestEnv.Store();
+        var legacy = Hashing.Sha256("fix_group|test-scope|" + Guid.NewGuid());
+        var keyA = FixKeys.Group(Dep(), "a/one", 1, "feature/x");
+        var keyB = FixKeys.Group(Dep(), "b/two", 1, "feature/x");
+        try
+        {
+            s.LedgerPut(FixKeys.PrLedger(legacy), "pr", "completed", "https://github.com/a/one/pull/9");
+            Assert.Null(FixKeys.ResolvePrEntry(s, keyB, legacy, "b/two"));            // repo B must run its own fixer
+            Assert.Null(s.Ledger(FixKeys.PrLedger(keyB)));
+            var a = FixKeys.ResolvePrEntry(s, keyA, legacy, "a/one");                // repo A: migrated to its scoped key
+            Assert.Equal("https://github.com/a/one/pull/9", a!.ResultRef);
+            Assert.Equal("completed", s.Ledger(FixKeys.PrLedger(keyA))!.Status);
+            // A scoped entry written for repo B never shows up for repo A.
+            s.LedgerPut(FixKeys.PrLedger(keyB), "pr", "completed", "https://github.com/b/two/pull/3");
+            Assert.Equal("https://github.com/a/one/pull/9", FixKeys.ResolvePrEntry(s, keyA, legacy, "a/one")!.ResultRef);
+        }
+        finally { s.LedgerDelete(FixKeys.PrLedger(legacy)); s.LedgerDelete(FixKeys.PrLedger(keyA)); s.LedgerDelete(FixKeys.PrLedger(keyB)); }
+    }
+}

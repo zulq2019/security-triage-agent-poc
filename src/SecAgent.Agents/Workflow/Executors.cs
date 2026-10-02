@@ -148,7 +148,7 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
     {
         var fix = R.Fixes[m.FixId];
         var findings = m.FindingIds.Select(id => R.Findings[id]).ToList();
-        var key = $"fix:{g.Key}:pr";
+        var key = FixKeys.PrLedger(g.Key);
         if (R.Pr.IsFork)
         {
             // The PR head branch lives in the contributor's fork, so a fix PR cannot target it from the base repository and
@@ -589,9 +589,10 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
         {
             var f = R.Findings[id];
             var route = S.Cfg.Routing.Routes[f.IssueType];
-            var key = f.IssueType == IssueTypes.VulnerableDependency ? Hashing.Sha256($"fix_group|{f.ComponentName}|{f.ComponentVersion}") : f.Fingerprint;
+            // Scoped by repository + target PR/ref (FixKeys v2) so a shared ledger never crosses repositories or PRs.
+            var key = FixKeys.Group(f, R.Pr.Repo, R.Pr.Number, R.Pr.HeadRef);
             if (!groups.TryGetValue(key, out var g))
-                groups[key] = g = new GroupInfo { Key = key, FixerId = route.Fixer, FindingIds = [], Branch = BranchFor(route.Fixer, key) };
+                groups[key] = g = new GroupInfo { Key = key, LegacyKey = FixKeys.Legacy(f), FixerId = route.Fixer, FindingIds = [], Branch = BranchFor(route.Fixer, key) };
             g.FindingIds.Add(id);
         }
         await S.Tools.RunAsync("router", "registry.read", string.Join(" · ", groups.Values.Select(g => $"{TriageExecutor.Label(R.Findings[g.FindingIds[0]]).Split(' ')[0]}→{FixerUi(g.FixerId)}")), Feed, e, () => Task.FromResult(true), Ct);
@@ -599,10 +600,10 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
         foreach (var g in groups.Values)
         {
             R.Groups[g.Key] = g;
-            var ledger = await S.Tools.RunAsync("router", "ledger.read", $"fix:{g.Key[..8]}…:pr", null, null, () => Task.FromResult(S.Store.Ledger($"fix:{g.Key}:pr")), Ct);
+            var ledger = await S.Tools.RunAsync("router", "ledger.read", $"fix:{g.Key[..8]}…:pr", null, null, () => Task.FromResult(FixKeys.ResolvePrEntry(S.Store, g.Key, g.LegacyKey, R.Pr.Repo)), Ct);
             if (ledger is { Status: "completed" })
             {
-                g.Outcome = "pr_reused"; g.PrUrl = ledger.ResultRef; g.PrNumber = int.TryParse(ledger.ResultRef?.Split('/').Last(), out var n) ? n : null;
+                g.Outcome = "pr_reused"; g.PrUrl = ledger.ResultRef; g.PrNumber = FixKeys.PrNumber(ledger.ResultRef);
                 lock (R.Lock) R.PrsReused++;
                 var e2 = Feed.Entry("router", $"{FixerName(g.FixerId)} group {Short(g.Key)} already has fix PR #{g.PrNumber} → not re-fixed (idempotent)", null, ["pr", $"PR #{g.PrNumber}"]);
                 Feed.Publish("pr", new { num = g.PrNumber, url = g.PrUrl, title = $"(existing) {g.Branch}", add = 0, del = 0, files = 0, status = "Awaiting review", reused = true, verified = true });

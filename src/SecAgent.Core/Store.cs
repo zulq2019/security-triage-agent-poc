@@ -201,6 +201,15 @@ public sealed class SqlStore
     }
     public void LedgerComplete(string key, string? resultRef) { using var c = Open(); c.Execute("UPDATE IdempotencyLedger SET status='completed', result_ref=@resultRef, updated_at=SYSUTCDATETIME() WHERE [key]=@key", new { key, resultRef }); }
     public void LedgerFail(string key, string? reason) { using var c = Open(); c.Execute("UPDATE IdempotencyLedger SET status='failed', result_ref=@reason, updated_at=SYSUTCDATETIME() WHERE [key]=@key", new { key, reason }); }
+    /// <summary>Creates the entry if missing (no-op when it already exists, so concurrent migrations cannot clobber each other).</summary>
+    public void LedgerPut(string key, string scope, string status, string? resultRef)
+    {
+        using var c = Open();
+        c.Execute("IF NOT EXISTS (SELECT 1 FROM IdempotencyLedger WITH (UPDLOCK, HOLDLOCK) WHERE [key]=@key) INSERT INTO IdempotencyLedger ([key],scope,status,result_ref,expires_at,updated_at) VALUES (@key,@scope,@status,@resultRef,SYSUTCDATETIME(),SYSUTCDATETIME())",
+            new { key, scope, status, resultRef });
+    }
+    /// <summary>Test helper.</summary>
+    public void LedgerDelete(string key) { using var c = Open(); c.Execute("DELETE FROM IdempotencyLedger WHERE [key]=@key OR [key] LIKE @prefix", new { key, prefix = key + ":superseded:%" }); }
     public LedgerEntry? Ledger(string key) { using var c = Open(); return c.QuerySingleOrDefault<LedgerEntry>("SELECT [key] AS [Key], scope, status, result_ref AS ResultRef FROM IdempotencyLedger WHERE [key]=@key", new { key }); }
 
     // ---------- Context packs / routing ----------

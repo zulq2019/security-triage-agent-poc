@@ -45,6 +45,8 @@ public sealed class RunState
 public sealed class GroupInfo
 {
     public required string Key { get; init; }
+    /// <summary>Unscoped v1 key, only used to migrate ledger entries written before keys were scoped by repo/PR.</summary>
+    public string LegacyKey { get; init; } = "";
     public required string FixerId { get; init; }
     public required List<Guid> FindingIds { get; init; }
     public string Branch { get; set; } = "";
