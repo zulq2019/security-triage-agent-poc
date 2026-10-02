@@ -116,3 +116,44 @@ public class ScopedFixKeyTests
         finally { s.LedgerDelete(FixKeys.PrLedger(legacy)); s.LedgerDelete(FixKeys.PrLedger(keyA)); s.LedgerDelete(FixKeys.PrLedger(keyB)); }
     }
 }
+
+/// <summary>Regression (review P1): completed ledger PRs are revalidated (state + target) before a group is skipped.</summary>
+public class LedgerRevalidationTests
+{
+    const string Repo = "a/one", Head = "feature/x";
+    static GitHubPrs.Pr P(string state, string baseRef = Head, string repo = Repo, int n = 9) => new(n, $"https://github.com/{repo}/pull/{n}", state, "t", baseRef);
+
+    [Fact]
+    public void Only_an_open_pr_in_the_same_repo_against_the_current_head_is_reused()
+    {
+        Assert.True(PrReuse.Decide(P("OPEN"), Repo, Head).Reuse);
+        Assert.Contains("merged", PrReuse.Decide(P("MERGED"), Repo, Head).Reason);
+        Assert.Contains("closed", PrReuse.Decide(P("CLOSED"), Repo, Head).Reason);
+        Assert.Contains("targets main", PrReuse.Decide(P("OPEN", baseRef: "main"), Repo, Head).Reason);
+        Assert.Contains("another repository", PrReuse.Decide(P("OPEN", repo: "b/two"), Repo, Head).Reason);
+        Assert.False(PrReuse.Decide(null, Repo, Head).Reuse);
+    }
+
+    [Fact]
+    public void Superseding_frees_the_key_for_a_new_scoped_entry_and_keeps_the_old_one_for_audit()
+    {
+        var s = TestEnv.Store();
+        var key = FixKeys.PrLedger(Hashing.Sha256("test-supersede|" + Guid.NewGuid()));
+        var run = Guid.NewGuid();
+        try
+        {
+            Assert.Null(s.TryTake(key, "pr", TimeSpan.FromMinutes(5)));
+            s.LedgerComplete(key, "https://github.com/a/one/pull/9");
+            Assert.Equal("completed", s.TryTake(key, "pr", TimeSpan.FromMinutes(5))!.Status);   // would be reused without revalidation
+            s.LedgerSupersede(key, run, "PR #9 was merged");
+            Assert.Null(s.Ledger(key));
+            Assert.Null(s.TryTake(key, "pr", TimeSpan.FromMinutes(5)));                         // a new entry can be taken
+            s.LedgerComplete(key, "https://github.com/a/one/pull/12");
+            var hist = s.LedgerHistory(key);
+            Assert.Equal(2, hist.Count);
+            Assert.Contains(hist, h => h.Status == "superseded" && h.ResultRef!.Contains("pull/9") && h.ResultRef.Contains("merged"));
+            Assert.Equal("https://github.com/a/one/pull/12", s.Ledger(key)!.ResultRef);
+        }
+        finally { s.LedgerDelete(key); }
+    }
+}

@@ -113,15 +113,33 @@ public sealed class GitWorkspace(string workRoot, Func<string, string>? cloneUrl
 /// branch-protection method in this class (FR-17); merges are a human action on GitHub.</summary>
 public static class GitHubPrs
 {
-    public sealed record Pr(int Number, string Url, string State, string Title);
+    /// <param name="State">OPEN, CLOSED or MERGED (gh CLI values).</param>
+    /// <param name="BaseRef">Branch the PR targets (for fix PRs: the scanned PR's head branch).</param>
+    public sealed record Pr(int Number, string Url, string State, string Title, string BaseRef = "");
+
+    const string PrFields = "number,url,state,title,baseRefName";
+    static Pr Parse(JsonNode j) => new(j["number"]!.GetValue<int>(), j["url"]!.GetValue<string>(), j["state"]!.GetValue<string>(), j["title"]!.GetValue<string>(),
+        j["baseRefName"]?.GetValue<string>() ?? "");
 
     public static async Task<Pr?> FindByHeadAsync(string repo, string head, CancellationToken ct)
     {
-        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", "number,url,state,title"], ct: ct);
+        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", PrFields], ct: ct);
         if (r.ExitCode != 0) throw new InvalidOperationException("gh pr list failed: " + r.StdErr);
         var arr = JsonNode.Parse(r.StdOut)!.AsArray();
         var j = arr.FirstOrDefault(x => x!["state"]!.GetValue<string>() == "OPEN") ?? arr.FirstOrDefault();
-        return j == null ? null : new Pr(j["number"]!.GetValue<int>(), j["url"]!.GetValue<string>(), j["state"]!.GetValue<string>(), j["title"]!.GetValue<string>());
+        return j == null ? null : Parse(j);
+    }
+
+    /// <summary>Current state of one PR (used to revalidate ledger entries before reusing them). Null when it no longer exists.</summary>
+    public static async Task<Pr?> GetAsync(string repo, int number, CancellationToken ct)
+    {
+        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "view", number.ToString(), "-R", repo, "--json", PrFields], ct: ct);
+        if (r.ExitCode != 0)
+        {
+            if (r.StdErr.Contains("Could not resolve", StringComparison.OrdinalIgnoreCase) || r.StdErr.Contains("not found", StringComparison.OrdinalIgnoreCase)) return null;
+            throw new InvalidOperationException("gh pr view failed: " + r.StdErr);
+        }
+        return Parse(JsonNode.Parse(r.StdOut)!);
     }
 
     public static async Task<Pr> CreateAsync(string repo, string baseBranch, string head, string title, string body, CancellationToken ct)
@@ -132,6 +150,23 @@ public static class GitHubPrs
         File.Delete(bodyFile);
         if (r.ExitCode != 0) throw new InvalidOperationException("gh pr create failed: " + r.StdErr);
         var url = r.StdOut.Trim().Split('\n').Last().Trim();
-        return new Pr(int.Parse(url.Split('/').Last()), url, "OPEN", title);
+        return new Pr(int.Parse(url.Split('/').Last()), url, "OPEN", title, baseBranch);
+    }
+}
+
+/// <summary>Decides whether an existing fix PR (from the idempotency ledger or found by branch) may be reused for the current
+/// run: it must still exist in the same repository, be OPEN, and target the scanned PR's current head branch.</summary>
+public static class PrReuse
+{
+    public sealed record Decision(bool Reuse, string Reason);
+
+    public static Decision Decide(GitHubPrs.Pr? pr, string repo, string targetRef)
+    {
+        if (pr == null) return new(false, "PR no longer exists");
+        if (!FixKeys.PrUrlInRepo(pr.Url, repo)) return new(false, $"PR #{pr.Number} is in another repository");
+        if (pr.State == "MERGED") return new(false, $"PR #{pr.Number} was merged");
+        if (pr.State != "OPEN") return new(false, $"PR #{pr.Number} is {pr.State.ToLowerInvariant()}");
+        if (!string.Equals(pr.BaseRef, targetRef, StringComparison.Ordinal)) return new(false, $"PR #{pr.Number} targets {pr.BaseRef}, not the current PR head {targetRef}");
+        return new(true, $"PR #{pr.Number} is open against {targetRef}");
     }
 }

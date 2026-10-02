@@ -165,15 +165,27 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         GitHubPrs.Pr? pr = null;
         if (taken is { Status: "completed" })
         {
-            pr = await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} (ledger hit {key[..20]}…)", Feed, e, () => GitHubPrs.FindByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
+            // Ledger hit: only reuse the recorded PR if it is still open in this repo and targets the current PR head.
+            var n = FixKeys.PrNumber(taken.ResultRef);
+            var cur = n is int num && FixKeys.PrUrlInRepo(taken.ResultRef, R.Pr.Repo)
+                ? await S.Tools.RunAsync("orchestrator", "github.get_pr", $"#{num} (ledger hit {key[..20]}…) revalidate", Feed, e, () => GitHubPrs.GetAsync(R.Pr.Repo, num, Ct), Ct)
+                : null;
+            var d = PrReuse.Decide(cur, R.Pr.Repo, R.Pr.HeadRef);
+            if (d.Reuse) pr = cur;
+            else
+            {
+                S.Store.LedgerSupersede(key, RunId, d.Reason);
+                Feed.Detail(e, new { type = "evid", text = $"Ledger PR not reused: {d.Reason}. Entry superseded; opening a new fix PR." });
+                taken = S.Store.TryTake(key, "pr", TimeSpan.FromMinutes(30));
+            }
         }
-        else if (taken != null)
+        if (pr == null && taken != null)
         {
             Feed.Update(e, "orch", $"PR creation for {m.Branch} already in progress elsewhere (ledger) · skipped", "warn");
             g.Outcome = "pr_reused"; return;
         }
         pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => GitHubPrs.FindByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
-        var reused = pr is { State: "OPEN" };
+        var reused = pr != null && PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef).Reuse;   // an open PR against another base is not reused
         var branch = m.Branch;
         try
         {
@@ -603,6 +615,19 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
             var ledger = await S.Tools.RunAsync("router", "ledger.read", $"fix:{g.Key[..8]}…:pr", null, null, () => Task.FromResult(FixKeys.ResolvePrEntry(S.Store, g.Key, g.LegacyKey, R.Pr.Repo)), Ct);
             if (ledger is { Status: "completed" })
             {
+                // Revalidate before skipping: the ledger PR must still be open in this repo and target the current PR head.
+                // --fresh never short-circuits here (the fixer re-runs; OpenPrAsync still reuses a valid open PR, so no duplicates).
+                var reuse = R.FreshTriage ? new PrReuse.Decision(false, "fresh run: ledger reuse bypassed") : await RevalidateAsync(ledger);
+                if (!reuse.Reuse)
+                {
+                    if (!R.FreshTriage) S.Store.LedgerSupersede(ledger.Key, RunId, reuse.Reason);
+                    Feed.Entry("router", $"{FixerName(g.FixerId)} group {Short(g.Key)}: ledger fix PR #{FixKeys.PrNumber(ledger.ResultRef)} not reused ({reuse.Reason})" +
+                        (R.FreshTriage ? "" : " · entry superseded") + " → re-fixing", "warn");
+                    ledger = null;
+                }
+            }
+            if (ledger is { Status: "completed" })
+            {
                 g.Outcome = "pr_reused"; g.PrUrl = ledger.ResultRef; g.PrNumber = FixKeys.PrNumber(ledger.ResultRef);
                 lock (R.Lock) R.PrsReused++;
                 var e2 = Feed.Entry("router", $"{FixerName(g.FixerId)} group {Short(g.Key)} already has fix PR #{g.PrNumber} → not re-fixed (idempotent)", null, ["pr", $"PR #{g.PrNumber}"]);
@@ -621,6 +646,13 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
         foreach (var msg in send)
             await ctx.SendMessageAsync(msg, msg is FixTask t ? "fixer-" + t.FixerId : "orch");
     });
+
+    async Task<PrReuse.Decision> RevalidateAsync(SqlStore.LedgerEntry ledger)
+    {
+        if (FixKeys.PrNumber(ledger.ResultRef) is not int n || !FixKeys.PrUrlInRepo(ledger.ResultRef, R.Pr.Repo)) return new(false, "ledger entry has no PR in this repository");
+        var pr = await S.Tools.RunAsync("router", "github.get_pr", $"#{n} revalidate (state, base)", null, null, () => GitHubPrs.GetAsync(R.Pr.Repo, n, Ct), Ct);
+        return PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef);
+    }
 }
 
 // ============================================================ Fixers ============================================================

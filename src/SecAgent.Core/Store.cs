@@ -208,6 +208,15 @@ public sealed class SqlStore
         c.Execute("IF NOT EXISTS (SELECT 1 FROM IdempotencyLedger WITH (UPDLOCK, HOLDLOCK) WHERE [key]=@key) INSERT INTO IdempotencyLedger ([key],scope,status,result_ref,expires_at,updated_at) VALUES (@key,@scope,@status,@resultRef,SYSUTCDATETIME(),SYSUTCDATETIME())",
             new { key, scope, status, resultRef });
     }
+    /// <summary>Retires an entry whose result is no longer valid (e.g. its PR was closed/merged or targets another head): the row is
+    /// kept for audit under "{key}:superseded:{run}" with status superseded, and the key itself is freed for a new entry.</summary>
+    public void LedgerSupersede(string key, Guid runId, string reason)
+    {
+        using var c = Open();
+        c.Execute("UPDATE IdempotencyLedger SET [key]=@newKey, status='superseded', result_ref=LEFT(CONCAT(result_ref, ' | superseded: ', @reason), 1000), updated_at=SYSUTCDATETIME() WHERE [key]=@key",
+            new { key, newKey = $"{key}:superseded:{runId:N}:{Guid.NewGuid().ToString("N")[..6]}", reason });
+    }
+    public List<LedgerEntry> LedgerHistory(string key) { using var c = Open(); return c.Query<LedgerEntry>("SELECT [key] AS [Key], scope, status, result_ref AS ResultRef FROM IdempotencyLedger WHERE [key]=@key OR [key] LIKE @prefix", new { key, prefix = key + ":superseded:%" }).ToList(); }
     /// <summary>Test helper.</summary>
     public void LedgerDelete(string key) { using var c = Open(); c.Execute("DELETE FROM IdempotencyLedger WHERE [key]=@key OR [key] LIKE @prefix", new { key, prefix = key + ":superseded:%" }); }
     public LedgerEntry? Ledger(string key) { using var c = Open(); return c.QuerySingleOrDefault<LedgerEntry>("SELECT [key] AS [Key], scope, status, result_ref AS ResultRef FROM IdempotencyLedger WHERE [key]=@key", new { key }); }
