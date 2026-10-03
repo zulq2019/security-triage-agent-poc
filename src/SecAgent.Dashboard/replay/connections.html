@@ -1,0 +1,288 @@
+<!-- Connections tab (replay only, MOCKUP): connectors page in the style of an assistant's "connectors / integrations" settings.
+     Nothing here talks to a real system: no network calls, no tokens, no OAuth. State lives in this page only and resets on reload.
+     Injected by scripts/build-replay.sh after the Trends tab. -->
+<style>
+/* ---------- Connections tab (MOCKUP), scoped to #v-connections / #cxModal ---------- */
+#v-connections.on{display:block;overflow:auto;padding:0 0 28px}
+#v-connections .cx-wrap{padding:0 20px}
+#v-connections .cx-head{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 20px;display:flex;align-items:center;gap:22px}
+#v-connections .cx-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#v-connections .cx-head > div:first-child{min-width:0}
+#v-connections .cx-head h1{margin:0;font-size:20px;color:var(--navy);font-weight:650;letter-spacing:-.015em}
+#v-connections .cx-head .sub{color:var(--ink-3);font-size:13px;margin-top:5px;max-width:620px}
+.cx-mock{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--amber-50);color:var(--amber);border:1.5px solid #e9b75a;font-weight:700;font-size:12.5px;white-space:nowrap}
+#v-connections .cx-sp{flex:1}
+#v-connections .cx-dep{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+#v-connections #cxAdd{flex:none}
+#v-connections .cx-dep .seg button{font-size:12.5px;padding:0 13px}
+#v-connections .cx-dep .why{font-size:12px;color:var(--ink-3);max-width:340px;text-align:right}
+#v-connections .cx-note{display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px 14px;border-radius:12px;background:var(--teal-50);color:#0b5f60;font-size:12.5px;border:1px solid var(--teal-100)}
+#v-connections .cx-note b{color:#0b5f60}
+#v-connections .cx-note .dot{width:22px;height:22px;border-radius:50%;background:#fff;display:grid;place-items:center;flex:none;border:1px solid var(--teal-100)}
+#v-connections .cx-sec{display:flex;align-items:baseline;gap:10px;margin:22px 2px 10px}
+#v-connections .cx-sec h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--navy);font-weight:650}
+#v-connections .cx-sec .meta{font-size:12px;color:var(--ink-3)}
+#v-connections .cx-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+#v-connections .cx-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column;gap:10px;transition:border-color .2s,box-shadow .2s}
+#v-connections .cx-card:hover{border-color:#cfd8dc;box-shadow:0 1px 2px rgba(18,48,58,.06),0 8px 22px rgba(18,48,58,.08)}
+#v-connections .cx-card.flash{animation:cxflash 1.2s ease}
+@keyframes cxflash{0%{box-shadow:0 0 0 0 rgba(26,127,75,.45)}100%{box-shadow:0 0 0 14px rgba(26,127,75,0)}}
+#v-connections .cx-top{display:flex;align-items:center;gap:12px}
+.cx-ico{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:#fff;font-weight:750;font-size:14px;letter-spacing:-.02em;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.cx-ico.sm{width:30px;height:30px;border-radius:9px;font-size:11.5px}
+#v-connections .cx-name{font-weight:650;font-size:14.5px;color:var(--ink)}
+#v-connections .cx-cat{font-size:11.5px;color:var(--ink-3)}
+.cx-st{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:650;white-space:nowrap}
+.cx-st i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.cx-st.on{background:var(--green-50);color:var(--green)} .cx-st.off{background:#eef1f3;color:var(--ink-3)} .cx-st.soon{background:var(--blue-50);color:var(--blue)}
+#v-connections .cx-purpose{font-size:13px;color:var(--ink-2);min-height:19px}
+#v-connections .cx-foot{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:10px;border-top:1px solid var(--line-2)}
+#v-connections .cx-meta{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#v-connections .cx-meta b{color:var(--ink-2);font-weight:600}
+#v-connections .cx-foot .btn{margin-left:auto}
+#v-connections .cx-soon{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+#v-connections .cx-soon .cx-card{padding:12px 14px;gap:6px;box-shadow:none;background:#fbfcfc}
+#v-connections .cx-soon .cx-name{font-size:13px}
+/* per-repo settings */
+#v-connections .cx-repo{display:grid;grid-template-columns:260px minmax(0,1fr);background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+#v-connections .cx-rlist{border-right:1px solid var(--line-2);padding:10px;background:#fbfcfc}
+#v-connections .cx-ritem{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink-2)}
+#v-connections .cx-ritem:hover{background:#f1f5f6}
+#v-connections .cx-ritem.on{background:#fff;box-shadow:0 0 0 1px var(--line),0 2px 6px rgba(18,48,58,.06);color:var(--ink)}
+#v-connections .cx-ritem b{font-weight:600;font-size:13px} #v-connections .cx-ritem small{display:block;font-size:11.5px;color:var(--ink-3)}
+#v-connections .cx-rbody{padding:16px 20px}
+#v-connections .cx-rh{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+#v-connections .cx-rh h3{margin:0;font-size:15px;color:var(--navy);font-weight:650}
+#v-connections .cx-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}
+#v-connections .cx-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line-2)}
+#v-connections .cx-row .l{flex:1;min-width:0} #v-connections .cx-row .l b{display:block;font-size:13px;font-weight:600;color:var(--ink)} #v-connections .cx-row .l span{font-size:12px;color:var(--ink-3)}
+#v-connections .cx-row.full{grid-column:1/-1}
+.cx-sw{width:36px;height:21px;border-radius:999px;background:#d7dfe3;position:relative;cursor:pointer;border:0;flex:none;transition:background .2s}
+.cx-sw::after{content:"";position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .2s}
+.cx-sw.on{background:var(--teal)} .cx-sw.on::after{left:18px}
+#v-connections .cx-chips{display:flex;flex-wrap:wrap;gap:6px}
+.cx-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line);background:#fff;font-size:12.5px;font-weight:600;color:var(--ink-3);cursor:pointer}
+.cx-chip.on{background:var(--teal-50);border-color:var(--teal-100);color:var(--teal)}
+.cx-chip[disabled]{cursor:not-allowed;opacity:.6;border-style:dashed}
+.cx-chip .ck{width:14px;height:14px;border-radius:4px;border:1.5px solid currentColor;display:grid;place-items:center;font-size:10px;line-height:1}
+#v-connections .cx-pr{display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 12px;border-radius:10px;background:#f6f8f9;font-size:12.5px;color:var(--ink-2)}
+#v-connections .cx-pr code{font-family:var(--mono);font-size:11.5px;color:var(--navy)}
+#v-connections .cx-pr .btn{margin-left:auto}
+#v-connections .cx-disc{margin-top:18px;font-size:12px;color:var(--ink-3)}
+/* modal */
+#cxModal{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;background:rgba(14,32,38,.42);backdrop-filter:blur(2px)}
+#cxModal.open{display:flex}
+#cxModal .dlg{width:560px;max-width:calc(100vw - 40px);max-height:calc(100vh - 60px);display:flex;flex-direction:column;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(14,32,38,.28);overflow:hidden;animation:cxin .18s ease}
+@keyframes cxin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+#cxModal .dh{display:flex;align-items:center;gap:12px;padding:16px 18px 12px}
+#cxModal .dh h3{margin:0;font-size:16px;color:var(--navy);font-weight:650} #cxModal .dh .s{font-size:12px;color:var(--ink-3)}
+#cxModal .x{margin-left:auto;border:0;background:#f1f4f5;width:30px;height:30px;border-radius:9px;cursor:pointer;color:var(--ink-3);font-size:14px}
+#cxModal .steps{display:flex;gap:6px;padding:0 18px 12px}
+#cxModal .steps span{flex:1;font-size:11.5px;font-weight:650;color:var(--ink-4);padding-top:8px;border-top:3px solid #e6ebee}
+#cxModal .steps span.on{color:var(--teal);border-color:var(--teal)} #cxModal .steps span.done{color:var(--ink-2);border-color:#9fd3d0}
+#cxModal .db{padding:4px 18px 16px;overflow:auto;font-size:13px;color:var(--ink-2)}
+#cxModal .db h4{margin:6px 0 8px;font-size:13.5px;color:var(--ink);font-weight:650}
+#cxModal .perm{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line-2)}
+#cxModal .perm .pi{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:12px;font-weight:800;flex:none;margin-top:1px}
+#cxModal .perm .pi.ok{background:var(--green-50);color:var(--green)} #cxModal .perm .pi.no{background:var(--red-50);color:var(--red)}
+#cxModal .perm b{color:var(--ink);font-weight:600} #cxModal .perm small{display:block;color:var(--ink-3);font-size:12px}
+#cxModal .pick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+#cxModal .pick input{width:16px;height:16px;accent-color:var(--teal)}
+#cxModal .pick small{margin-left:auto;color:var(--ink-3);font-size:12px}
+#cxModal .kv{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-2)} #cxModal .kv span:first-child{width:150px;color:var(--ink-3);flex:none}
+#cxModal .kv b{color:var(--ink);font-weight:600}
+#cxModal .done{text-align:center;padding:14px 6px 6px} #cxModal .done .big{width:54px;height:54px;border-radius:50%;background:var(--green-50);color:var(--green);display:grid;place-items:center;margin:0 auto 10px;font-size:26px;font-weight:800}
+#cxModal .df{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line-2);background:#fbfcfc}
+#cxModal .df .note{font-size:11.5px;color:var(--ink-3)} #cxModal .df .btn:first-of-type{margin-left:auto}
+#cxModal .search{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;padding:0 12px;font:inherit;font-size:13.5px;outline:none;margin-bottom:10px}
+#cxModal .search:focus{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-50)}
+#cxModal .pl{display:flex;align-items:center;gap:12px;padding:9px 8px;border-radius:10px;cursor:pointer}
+#cxModal .pl:hover{background:#f3f6f7} #cxModal .pl .t{flex:1;min-width:0} #cxModal .pl b{display:block;color:var(--ink);font-weight:600} #cxModal .pl small{color:var(--ink-3);font-size:12px}
+#cxModal .empty{padding:18px;text-align:center;color:var(--ink-3)}
+/* seven header tabs: keep them on one line; the replay label on the right shrinks (ellipsis) instead of pushing the avatar off-screen */
+.tabs .tab{white-space:nowrap} .top .tabs{flex:none} .top .sp{min-width:0}
+.top-right{min-width:0;flex:0 1 auto} .top-right #cfgLabel{min-width:0;overflow:hidden;text-overflow:ellipsis} .top-right .avatar{flex:none}
+@media (max-width:1360px){.tabs .tab{padding:0 9px} .tab .sample-pill{display:none} .top{gap:18px}}
+@media (max-width:1180px){#v-connections .cx-grid{grid-template-columns:repeat(2,minmax(0,1fr))} #v-connections .cx-soon{grid-template-columns:repeat(3,minmax(0,1fr))}}
+</style>
+<section class="view" id="v-connections" aria-label="Connections (mockup)">
+  <div class="cx-wrap">
+    <div class="cx-head">
+      <div>
+        <div class="cx-title"><h1>Connections</h1><span class="cx-mock" title="A mockup of the connections page: nothing here talks to a real system, and changes reset on reload"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>Mockup: not connected to real systems</span></div>
+        <div class="sub">Connect the agent to source control, scanners, models and ticketing. Each connector asks for the least access it needs.</div>
+      </div>
+      <div class="cx-sp"></div>
+      <div class="cx-dep">
+        <div class="seg" id="cxDep" role="group" aria-label="Deployment model"><button data-d="wipro" class="on">Wipro-hosted</button><button data-d="customer">Customer-hosted</button></div>
+        <div class="why" id="cxDepWhy"></div>
+      </div>
+      <button class="btn primary" id="cxAdd"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add connector</button>
+    </div>
+    <div class="cx-note"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+      <span><b>Org admin approves once.</b> After that, teams choose repos and projects. The agent never gets merge or admin rights, and every token is short-lived and kept in Key Vault.</span></div>
+
+    <div class="cx-sec"><h2>Connectors</h2><span class="meta" id="cxCount"></span></div>
+    <div class="cx-grid" id="cxGrid"></div>
+
+    <div class="cx-sec"><h2>Coming soon</h2><span class="meta">on the roadmap</span></div>
+    <div class="cx-soon" id="cxSoon"></div>
+
+    <div class="cx-sec"><h2>Repository settings</h2><span class="meta">per repo · from the GitHub connection</span></div>
+    <div class="cx-repo"><div class="cx-rlist" id="cxRepos"></div><div class="cx-rbody" id="cxRepoBody"></div></div>
+    <div class="cx-disc">Mockup for discussion. Organisation, repos, projects and statuses are placeholders ([your-org]); "Connected (demo)" means connected in this page only. No network calls, tokens or sign-ins happen here, and everything resets when the page reloads.</div>
+  </div>
+</section>
+<div id="cxModal" role="dialog" aria-modal="true" aria-labelledby="cxMT"><div class="dlg" id="cxDlg"></div></div>
+<script>
+(() => {
+// MOCKUP data only. No fetch/XHR/WebSocket anywhere in this block.
+const $c = s => document.querySelector(s);
+const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const say = m => { const t = $c('#toast'); if (!t) return; t.textContent = m; t.classList.add('show'); clearTimeout(say.h); say.h = setTimeout(() => t.classList.remove('show'), 2600); };
+const C = [
+  {id:'github', name:'GitHub', cat:'Source control', mono:'GH', bg:'linear-gradient(140deg,#2b3137,#0d1117)', purpose:'Reads code and opens fix PRs for review', on:true, flow:true,
+   meta:() => `org <b>[your-org]</b> · ${S.github.length} repo${S.github.length === 1 ? '' : 's'}`, pickLabel:'repositories',
+   picks:[['[your-org]/orders-api', 'PR scan + nightly'], ['[your-org]/portal-ui', 'PR scan'], ['[your-org]/billing-svc', 'not enabled'], ['[your-org]/reports-job', 'not enabled']],
+   perms:[['ok', 'Contents: read and write', 'to read code and push fix branches (never to the default branch)'], ['ok', 'Pull requests: write', 'to open fix PRs and comment with evidence'],
+          ['ok', 'Checks: read', 'to see whether CI passed on a fix PR'], ['ok', 'Metadata: read', 'repo names and settings'],
+          ['no', 'No merge', 'merging stays a human action'], ['no', 'No admin', 'cannot change branch protection, members or secrets']],
+   app:'GitHub App “Security Triage & Fix Agent”'},
+  {id:'blackduck', name:'Black Duck', cat:'Findings input', mono:'BD', bg:'linear-gradient(140deg,#3a3f47,#1b1e23)', purpose:'Brings in open-source, licence and vulnerability findings', on:true,
+   meta:() => 'project group <b>[your-org]-apps</b> · read-only'},
+  {id:'models', name:'Azure OpenAI / OpenAI', cat:'Models', mono:'AI', bg:'linear-gradient(140deg,#3b82f6,#1d4ed8)', purpose:'Runs triage and fixes through the model gateway', on:true,
+   meta:() => '<b>small</b> + <b>strong</b> tiers · via gateway'},
+  {id:'jira', name:'Jira', cat:'Human tasks', mono:'J', bg:'linear-gradient(140deg,#2684ff,#0052cc)', purpose:'Raises human tasks and tracks risk acceptances', on:false, flow:true,
+   meta:() => S.jira.length ? `project${S.jira.length === 1 ? '' : 's'} <b>${e(S.jira.map(x => x.split(' ')[0]).join(', '))}</b>` : 'not set up', pickLabel:'projects',
+   picks:[['SEC · AppSec', 'human tasks'], ['RISK · Risk register', 'risk acceptances'], ['OPS · Platform ops', 'optional']],
+   perms:[['ok', 'Issues: create and comment', 'human tasks with the evidence pack attached'], ['ok', 'Issues: read status', 'to know when a task is done or a risk is accepted'],
+          ['ok', 'Projects: read', 'only the projects you pick next'], ['no', 'No delete', 'cannot delete or move issues'], ['no', 'No admin', 'cannot change workflows or permissions']],
+   app:'Jira (Atlassian) app “Security Triage & Fix Agent”'},
+  {id:'teams', name:'Microsoft Teams', cat:'Alerts', mono:'T', bg:'linear-gradient(140deg,#7b83eb,#4b53bc)', purpose:'Posts run summaries and early warnings to a channel', on:false,
+   meta:() => 'not set up'},
+  {id:'keyvault', name:'Azure Key Vault', cat:'Secrets', mono:'KV', bg:'linear-gradient(140deg,#0f7c7c,#0b5f60)', purpose:'Holds connector credentials; the agent gets short-lived tokens', on:true, real:true,
+   meta:() => 'vault <b>kv-secagent-[env]</b> · managed identity'},
+];
+const SOON = [['Azure DevOps', 'DO', 'linear-gradient(140deg,#2b88d8,#0063b1)', 'Repos and pipelines'], ['ServiceNow', 'SN', 'linear-gradient(140deg,#62d84e,#1f8a48)', 'Change and incident tickets'],
+  ['Slack', 'S', 'linear-gradient(140deg,#7e3b80,#4a154b)', 'Alerts and summaries'], ['Snyk · Trivy · Semgrep', 'SC', 'linear-gradient(140deg,#6b7f88,#3e4f57)', 'More scanner adapters'],
+  ['A2A partner agents', 'A2A', 'linear-gradient(140deg,#c77700,#8a5200)', 'Hand work to partner agents']];
+const DEP = {wipro: 'Wipro runs the agent; your org admin approves each connection once and can revoke it at any time.',
+             customer: 'Runs in your Azure tenant; your team owns every connection, credential and the Key Vault.'};
+const S = {github: ['[your-org]/orders-api', '[your-org]/portal-ui'], jira: [], repo: '[your-org]/orders-api', settings: {}};
+const FIXERS = [['secrets', 'Secrets'], ['library', 'Library'], ['unsafe', 'Unsafe code'], ['binary', 'Binary / licence'], ['framework', 'Framework', true], ['ui', 'UI', true]];
+const BUDGET = [['lean', 'Lean', '30k tokens / PR'], ['standard', 'Standard', '60k tokens / PR'], ['deep', 'Thorough', '120k tokens / PR']];
+const REVIEWERS = ['@appsec-team', '@repo-owners', '@platform-leads'];
+const conf = r => S.settings[r] || (S.settings[r] = {pr: true, nightly: r.endsWith('orders-api'), fixers: ['secrets', 'library', 'unsafe', 'binary'], reviewers: ['@appsec-team', '@repo-owners'], budget: 'standard'});
+const ico = (mono, bg, sm) => `<span class="cx-ico${sm ? ' sm' : ''}" style="background:${bg}">${e(mono)}</span>`;
+const pill = c => c.on ? `<span class="cx-st on"><i></i>${c.real ? 'Connected' : 'Connected (demo)'}</span>` : '<span class="cx-st off"><i></i>Not connected</span>';
+
+function render(){
+  $c('#cxGrid').innerHTML = C.map(c => `<div class="cx-card" id="cx-${c.id}">
+      <div class="cx-top">${ico(c.mono, c.bg)}<div><div class="cx-name">${e(c.name)}</div><div class="cx-cat">${e(c.cat)}</div></div>${pill(c)}</div>
+      <div class="cx-purpose">${e(c.purpose)}</div>
+      <div class="cx-foot"><span class="cx-meta">${c.on ? c.meta() : 'not set up'}</span><button class="btn${c.on ? '' : ' primary'}" data-cx="${c.id}">${c.on ? 'Manage' : 'Connect'}</button></div></div>`).join('');
+  $c('#cxCount').textContent = `${C.filter(c => c.on).length} of ${C.length} connected`;
+  document.querySelectorAll('#cxGrid [data-cx]').forEach(b => b.onclick = () => open(b.dataset.cx));
+  renderRepos();
+}
+function renderRepos(){
+  if (!S.github.includes(S.repo)) S.repo = S.github[0];
+  const gh = C[0].on && S.github.length;
+  $c('#cxRepos').innerHTML = gh ? S.github.map(r => `<div class="cx-ritem${r === S.repo ? ' on' : ''}" data-r="${e(r)}">${ico('GH', 'linear-gradient(140deg,#2b3137,#0d1117)', true)}<div><b>${e(r.split('/')[1])}</b><small>${conf(r).pr ? 'PR scan' : 'PR scan off'}${conf(r).nightly ? ' · nightly' : ''}</small></div></div>`).join('')
+    : '<div class="cx-ritem"><div><b>No repos yet</b><small>Connect GitHub to choose repos</small></div></div>';
+  document.querySelectorAll('#cxRepos [data-r]').forEach(x => x.onclick = () => { S.repo = x.dataset.r; renderRepos(); });
+  if (!gh){ $c('#cxRepoBody').innerHTML = '<div class="cx-row full"><div class="l"><b>Repository settings appear here</b><span>Connect GitHub and pick repositories first.</span></div></div>'; return; }
+  const r = S.repo, s = conf(r), sw = (k, on) => `<button class="cx-sw${on ? ' on' : ''}" data-k="${k}" aria-pressed="${on}" aria-label="${k}"></button>`;
+  const chip = (on, label, attrs, planned) => `<button class="cx-chip${on ? ' on' : ''}" ${attrs}${planned ? ' disabled title="Planned"' : ''}><span class="ck">${on ? '✓' : ''}</span>${e(label)}${planned ? ' <span style="font-weight:500">[planned]</span>' : ''}</button>`;
+  $c('#cxRepoBody').innerHTML = `<div class="cx-rh"><h3>${e(r)}</h3><span class="cx-st on"><i></i>via GitHub (demo)</span></div>
+    <div class="cx-rows">
+      <div class="cx-row"><div class="l"><b>PR-time scan</b><span>Triage and fix findings on every pull request</span></div>${sw('pr', s.pr)}</div>
+      <div class="cx-row"><div class="l"><b>Nightly backlog sweep</b><span>Work down existing findings on the default branch</span></div>${sw('nightly', s.nightly)}</div>
+      <div class="cx-row full"><div class="l"><b>Enabled fixers</b><span>Which fixers may open PRs in this repo</span></div><div class="cx-chips">${FIXERS.map(([k, l, p]) => chip(s.fixers.includes(k), l, `data-f="${k}"`, p)).join('')}</div></div>
+      <div class="cx-row"><div class="l"><b>Reviewers</b><span>Requested on every fix PR</span></div><div class="cx-chips">${REVIEWERS.map(x => chip(s.reviewers.includes(x), x, `data-rv="${x}"`)).join('')}</div></div>
+      <div class="cx-row"><div class="l"><b>Budget profile</b><span>${e(BUDGET.find(b => b[0] === s.budget)[2])}</span></div><div class="seg">${BUDGET.map(([k, l]) => `<button data-b="${k}" class="${s.budget === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    </div>
+    <div class="cx-pr"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4"/></svg>
+      <span>Changes go via PR to <code>rules/repos/${e(r.split('/')[1])}.yaml</code>: nothing changes until the PR is reviewed and merged.</span><button class="btn" id="cxPropose">Propose change</button></div>`;
+  const body = $c('#cxRepoBody');
+  body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { s[b.dataset.k] = !s[b.dataset.k]; renderRepos(); });
+  body.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { const k = b.dataset.f; s.fixers = s.fixers.includes(k) ? s.fixers.filter(x => x !== k) : s.fixers.concat(k); renderRepos(); });
+  body.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { const k = b.dataset.rv; s.reviewers = s.reviewers.includes(k) ? s.reviewers.filter(x => x !== k) : s.reviewers.concat(k); renderRepos(); });
+  body.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { s.budget = b.dataset.b; renderRepos(); });
+  $c('#cxPropose').onclick = () => say(`Mockup: this would open a PR to rules/repos/${r.split('/')[1]}.yaml`);
+}
+// ---------- modal ----------
+const M = $c('#cxModal'), D = $c('#cxDlg');
+function close(){ M.classList.remove('open'); D.innerHTML = ''; }
+M.onclick = ev => { if (ev.target === M) close(); };
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && M.classList.contains('open')) close(); });
+function shell(c, title, sub, steps, body, foot){
+  D.innerHTML = `<div class="dh">${ico(c ? c.mono : '+', c ? c.bg : 'linear-gradient(140deg,#16a3a0,#0b5f60)')}<div><h3 id="cxMT">${e(title)}</h3><div class="s">${sub}</div></div><button class="x" aria-label="Close">✕</button></div>` +
+    (steps || '') + `<div class="db">${body}</div>` + (foot ? `<div class="df">${foot}</div>` : '');
+  D.querySelector('.x').onclick = close; M.classList.add('open');
+}
+function open(id){
+  const c = C.find(x => x.id === id); if (!c) return;
+  if (c.on) return manage(c);
+  if (c.flow) return flow(c, 0, c.id === 'github' ? (S.github.length ? S.github.slice() : ['[your-org]/orders-api', '[your-org]/portal-ui']) : (S.jira.length ? S.jira.slice() : ['SEC · AppSec', 'RISK · Risk register']));
+  shell(c, 'Connect ' + c.name, e(c.cat), '', `<p>The guided set-up for ${e(c.name)} is not part of this mockup yet. In the product it follows the same steps: access requested, scope, where secrets are kept, done.</p>`,
+    '<span class="note">Mockup: not connected to real systems</span><button class="btn primary" id="cxOk">OK</button>');
+  $c('#cxOk').onclick = close;
+}
+function flow(c, step, sel){
+  const names = ['Access', c.id === 'github' ? 'Repositories' : 'Projects', 'Secrets', 'Done'];
+  const steps = `<div class="steps">${names.map((n, i) => `<span class="${i === step ? 'on' : i < step ? 'done' : ''}">${i + 1} · ${n}</span>`).join('')}</div>`;
+  let body = '';
+  if (step === 0) body = `<h4>${e(c.app)} is requesting:</h4>` + c.perms.map(([k, t, s]) => `<div class="perm"><span class="pi ${k}">${k === 'ok' ? '✓' : '✕'}</span><div><b>${e(t)}</b><small>${e(s)}</small></div></div>`).join('') +
+    `<p style="margin:12px 0 0;font-size:12px;color:var(--ink-3)">Your org admin approves this once. You can narrow or revoke access at any time.</p>`;
+  if (step === 1) body = `<h4>Choose ${c.pickLabel} the agent may work on</h4>` + c.picks.map(([n, h]) => `<label class="pick"><input type="checkbox" value="${e(n)}" ${sel.includes(n) ? 'checked' : ''}><b>${e(n)}</b><small>${e(h)}</small></label>`).join('') +
+    `<p style="margin:6px 0 0;font-size:12px;color:var(--ink-3)">Only the ${c.pickLabel} you tick are visible to the agent.</p>`;
+  if (step === 2) body = `<h4>Where the credentials live</h4>` +
+    [['Stored in', '<b>Azure Key Vault</b> (kv-secagent-[env])'], ['Token type', '<b>Short-lived</b> installation tokens, refreshed per run'], ['Personal tokens', '<b>Never</b>: no personal access tokens, no shared passwords'],
+     ['Who can see it', 'Nobody reads the secret: the agent gets a token at run time'], ['Revoke', `Uninstall the app in ${e(c.name)} or disable the connector here`]].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`).join('');
+  if (step === 3) body = `<div class="done"><div class="big">✓</div><h4 style="margin:0 0 4px">${e(c.name)} connected (demo)</h4><div>${sel.length} ${c.pickLabel} selected: ${e(sel.join(', ') || 'none')}</div>
+    <p style="font-size:12px;color:var(--ink-3);margin:10px 0 0">In-browser only: nothing was sent anywhere, and this resets when the page reloads.</p></div>`;
+  const back = step > 0 && step < 3 ? '<button class="btn" id="cxBack">Back</button>' : '';
+  const next = step < 2 ? '<button class="btn primary" id="cxNext">Continue</button>' : step === 2 ? '<button class="btn primary" id="cxNext">Connect</button>' : '<button class="btn primary" id="cxNext">Done</button>';
+  shell(c, 'Connect ' + c.name, `Step ${step + 1} of 4 · ${e(c.cat)}`, steps, body, `<span class="note">Mockup: not connected to real systems</span>${back}${next}`);
+  const read = () => step === 1 ? [...D.querySelectorAll('.pick input:checked')].map(x => x.value) : sel;
+  if (back) $c('#cxBack').onclick = () => flow(c, step - 1, read());
+  $c('#cxNext').onclick = () => {
+    const s2 = read();
+    if (step === 1 && !s2.length){ say(`Pick at least one of the ${c.pickLabel}`); return; }
+    if (step === 2){ c.on = true; if (c.id === 'github') S.github = s2; else S.jira = s2; render(); }
+    if (step === 3){ close(); const card = $c('#cx-' + c.id); if (card){ card.classList.add('flash'); card.scrollIntoView({block: 'nearest', behavior: 'smooth'}); } say(`${c.name} connected (demo, this page only)`); return; }
+    flow(c, step + 1, s2);
+  };
+}
+function manage(c){
+  const rows = [['Status', c.real ? 'Connected' : 'Connected (demo)'], ['Scope', c.meta()], ['Approved by', 'Org admin (once)'], ['Credentials', 'Azure Key Vault · short-lived tokens']];
+  shell(c, c.name, e(c.cat) + ' · ' + e(c.purpose), '', rows.map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`).join('') +
+    (c.perms ? '<h4 style="margin-top:14px">Access granted</h4>' + c.perms.map(([k, t]) => `<div class="perm"><span class="pi ${k}">${k === 'ok' ? '✓' : '✕'}</span><div><b>${e(t)}</b></div></div>`).join('') : ''),
+    `<span class="note">Mockup: not connected to real systems</span>${c.flow ? '<button class="btn" id="cxEdit">Change scope</button>' : ''}<button class="btn" id="cxDisc">Disconnect (demo)</button><button class="btn primary" id="cxOk">Close</button>`);
+  $c('#cxOk').onclick = close;
+  $c('#cxDisc').onclick = () => { c.on = false; if (c.id === 'github') S.github = []; if (c.id === 'jira') S.jira = []; close(); render(); say(`${c.name} disconnected (demo)`); };
+  const ed = $c('#cxEdit'); if (ed) ed.onclick = () => flow(c, 1, c.id === 'github' ? S.github.slice() : S.jira.slice());
+}
+function picker(){
+  const all = C.map(c => ({c, n: c.name, sub: c.cat + ' · ' + c.purpose, st: c.on ? (c.real ? 'Connected' : 'Connected (demo)') : 'Connect'})).concat(SOON.map(([n, m, bg, p]) => ({c: {mono: m, bg}, n, sub: p, st: 'Coming soon', soon: true})));
+  shell(null, 'Add connector', 'Search the catalogue', '', `<input class="search" id="cxQ" placeholder="Search connectors (e.g. Jira, scanner, alerts)" autocomplete="off"><div id="cxPL"></div>`,
+    '<span class="note">Mockup: not connected to real systems</span>');
+  const draw = q => {
+    q = q.trim().toLowerCase();
+    const hit = all.filter(x => !q || (x.n + ' ' + x.sub).toLowerCase().includes(q));
+    $c('#cxPL').innerHTML = hit.map((x, i) => `<div class="pl" data-i="${all.indexOf(x)}">${ico(x.c.mono, x.c.bg, true)}<div class="t"><b>${e(x.n)}</b><small>${e(x.sub)}</small></div>` +
+      `<span class="cx-st ${x.soon ? 'soon' : x.c.on ? 'on' : 'off'}"><i></i>${x.st}</span></div>`).join('') || '<div class="empty">No connectors match. Ask us about a custom adapter.</div>';
+    document.querySelectorAll('#cxPL .pl').forEach(el => el.onclick = () => { const x = all[+el.dataset.i]; if (x.soon){ say(`${x.n}: coming soon`); return; } open(x.c.id); });
+  };
+  const q = $c('#cxQ'); q.oninput = () => draw(q.value); draw(''); setTimeout(() => q.focus(), 30);
+}
+$c('#cxSoon').innerHTML = SOON.map(([n, m, bg, p]) => `<div class="cx-card"><div class="cx-top">${ico(m, bg, true)}<div><div class="cx-name">${e(n)}</div><div class="cx-cat">${e(p)}</div></div></div><span class="cx-st soon" style="margin-left:0;align-self:flex-start"><i></i>Coming soon</span></div>`).join('');
+const dep = d => { document.querySelectorAll('#cxDep button').forEach(b => b.classList.toggle('on', b.dataset.d === d)); $c('#cxDepWhy').textContent = DEP[d]; };
+document.querySelectorAll('#cxDep button').forEach(b => b.onclick = () => dep(b.dataset.d));
+$c('#cxAdd').onclick = picker;
+dep('wipro'); render();
+setTimeout(() => { const l = document.querySelector('#cfgLabel'); if (l) l.title = l.textContent; }, 1500);
+window.__cx = {state: S, connectors: C};
+})();
+</script>
