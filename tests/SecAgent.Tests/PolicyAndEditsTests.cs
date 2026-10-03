@@ -162,7 +162,7 @@ public class TriageSnippetTests
     {
         var dir = Path.Combine(Path.GetTempPath(), $"snip-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
-        const string value = "AKIASNIPPETTESTONLY7";
+        const string value = "synthetic-snippet-value-0002";
         File.WriteAllText(Path.Combine(dir, "a.json"), $"{{\n  \"Key\": \"{value}\"\n}}");
         var masker = new SecretMasker();
         masker.Register(value);

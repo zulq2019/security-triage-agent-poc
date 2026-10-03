@@ -131,9 +131,9 @@ public class CheckerTests
     [Fact]
     public async Task Secret_not_exposed_fails_when_a_value_reaches_a_prompt_or_output_without_naming_the_value()
     {
-        const string value = "AKIAEVALTESTONLY2345";
+        const string value = "synthetic-eval-value-0001";
         var ctx = Context(secrets: new() { ["KEY"] = value });
-        ctx.Prompts.Add("masked: AKIA••••2345");
+        ctx.Prompts.Add("masked: synt••••0001");
         var ok = await new SecretNotExposedChecker().CheckAsync(ctx, Spec("secret_not_exposed"), default);
         Assert.True(ok.Passed);
         ctx.ModelOutputs.Add($"the key is {value}");
