@@ -634,6 +634,8 @@ function initReplayUsage(){
   const td = document.querySelector('#uRange button[data-r="today"]'); if (td) td.title = 'Recorded run day (' + UL.today + ' IST): the replay is a static snapshot';
 }
 initUsage();
+// Trends tab (replay only, sample data): its filters and buttons are illustrative and not wired to data.
+document.querySelectorAll('#v-trends [data-mock]').forEach(b => b.onclick = () => toast('Sample view: Trends filters and exports are not wired to data'));
 window.__usage = us; window.__ul = UL; Object.defineProperty(window, "__rec", {get: () => REC});
 
 // ------------------------------------------------ replay ------------------------------------------------
