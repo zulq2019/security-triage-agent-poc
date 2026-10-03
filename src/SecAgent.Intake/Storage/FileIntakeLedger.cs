@@ -1,16 +1,26 @@
 using System.Text.Json;
+using Microsoft.Extensions.Options;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Core;
+using SecAgent.Intake.Configuration;
 
 namespace SecAgent.Intake.Storage;
 
-/// <summary>Idempotency ledger as one JSON file per key (.data/intake/ledger/&lt;key&gt;.json). The claim uses FileMode.CreateNew, which is
-/// atomic across threads and processes, so two identical concurrent POSTs cannot both be accepted.
+/// <summary>Local adapter for the ledger ports: one JSON file per key ({LedgerFolder}/&lt;key&gt;.json). The claim uses FileMode.CreateNew,
+/// which is atomic across threads and processes, so two identical concurrent POSTs cannot both be accepted.
 /// Cloud: a SQL table with a UNIQUE key column (INSERT … on duplicate → existing row) or Azure Table Storage (Add → 409 Conflict).</summary>
-public sealed class FileIntakeLedger : IIntakeLedger
+public sealed class FileIntakeLedger : IIntakeLedger, IIntakeRecordQuery
 {
     readonly string _dir;
-    readonly object _lock = new();
-    public FileIntakeLedger(string dir) { _dir = dir; Directory.CreateDirectory(dir); }
+    readonly TimeProvider _clock;
+    readonly Lock _lock = new();
+
+    public FileIntakeLedger(IOptions<IntakeOptions> options, TimeProvider clock)
+    {
+        _dir = options.Value.LedgerFolder;
+        _clock = clock;
+        Directory.CreateDirectory(_dir);
+    }
 
     string PathOf(string key) => Path.Combine(_dir, (key.All(Uri.IsHexDigit) ? key : Hashing.Sha256(key)) + ".json");
 
@@ -33,7 +43,7 @@ public sealed class FileIntakeLedger : IIntakeLedger
 
     public void Update(IntakeRecord record)
     {
-        record.UpdatedAt = DateTime.UtcNow;
+        record.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         var path = PathOf(record.Key);
         lock (_lock)
         {

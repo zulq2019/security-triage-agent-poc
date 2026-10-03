@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using SecAgent.Agents.Scanners;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Core;
 
 namespace SecAgent.Intake.Parsers;
@@ -81,14 +81,14 @@ public static partial class ParserUtil
     };
 
     /// <summary>Severity words from scanners (critical/high/…, SARIF levels error/warning/note/none, Black Duck CRITICAL/HIGH/MEDIUM/LOW/OK/UNSCORED).
-    /// Reuses the scanner adapters' mapping (Common.Sev); unknown words → null so the caller can fall back.</summary>
+    /// Reuses the scanner adapters' mapping (FindingNormalisation.Severity); unknown words → null so the caller can fall back.</summary>
     public static string? SeverityFromWord(string? word)
     {
         var w = (word ?? "").Trim().ToLowerInvariant();
         if (w.Length == 0) return null;
         if (w is "none" or "ok" or "informational" or "unscored" or "trivial") return "info";
         var known = new[] { "critical", "high", "error", "medium", "moderate", "warning", "low", "note", "info", "negligible" };
-        return known.Contains(w) ? Common.Sev(w) : null;
+        return known.Contains(w) ? FindingNormalisation.Severity(w) : null;
     }
 
     public static List<string> VulnIds(params string?[] texts)
@@ -169,7 +169,7 @@ public static partial class ParserUtil
         var u = uri.Trim();
         if (u.Contains("unknown-file", StringComparison.OrdinalIgnoreCase)) return null;
         if (u.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) u = Uri.UnescapeDataString(u[7..]);
-        u = Common.Rel(u);
+        u = FindingNormalisation.RepoRelativePath(u);
         return u.Length == 0 ? null : u;
     }
 

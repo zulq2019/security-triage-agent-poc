@@ -8,7 +8,10 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using SecAgent.Intake;
+using Microsoft.Extensions.Options;
+using SecAgent.Abstractions.Intake;
+using SecAgent.Intake.Configuration;
+using SecAgent.Intake.Http;
 using YamlDotNet.RepresentationModel;
 using Xunit;
 
@@ -27,8 +30,9 @@ public sealed class IntakeHttpTests : IAsyncLifetime
         var b = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         b.Logging.ClearProviders();
         b.WebHost.UseUrls("http://127.0.0.1:0");
+        _kit.Wire(b.Services);   // same composition root as the dashboard (services.AddSecAgentIntake), test doubles for the pipeline ports
         _app = b.Build();
-        _app.MapIntake(_kit.Service, new HmacIntakeAuthenticator(() => _kit.Options.HmacSecret, _kit.Options.TimestampToleranceSeconds));
+        _app.MapSecAgentIntake();
         await _app.StartAsync();
         _base = _app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First().TrimEnd('/');
     }
@@ -45,11 +49,11 @@ public sealed class IntakeHttpTests : IAsyncLifetime
     {
         var req = new HttpRequestMessage(HttpMethod.Post, $"{_base}/api/intake/{m.Format}") { Content = new ByteArrayContent(body) };
         req.Content.Headers.ContentType = new("application/json");
-        var headers = HmacIntakeAuthenticator.HeadersFor(m);
+        var headers = IntakeSignature.HeadersFor(m);
         foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
         var t = (ts ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToString();
-        req.Headers.TryAddWithoutValidation(HmacIntakeAuthenticator.TimestampHeader, t);
-        if (secret != null) req.Headers.TryAddWithoutValidation(HmacIntakeAuthenticator.SignatureHeader, HmacIntakeAuthenticator.Sign(secret, m.Format, headers, t, body));
+        req.Headers.TryAddWithoutValidation(IntakeHeaders.Timestamp, t);
+        if (secret != null) req.Headers.TryAddWithoutValidation(IntakeHeaders.Signature, IntakeSignature.Sign(secret, m.Format, headers, t, body));
         return req;
     }
 
@@ -112,8 +116,8 @@ public sealed class IntakeHttpTests : IAsyncLifetime
 
         // Signed for PR 7, header rewritten to PR 8 in transit → signature no longer matches.
         var req = Signed(meta, body);
-        req.Headers.Remove(IntakeService.Headers.Pr);
-        req.Headers.TryAddWithoutValidation(IntakeService.Headers.Pr, "8");
+        req.Headers.Remove(IntakeHeaders.Pr);
+        req.Headers.TryAddWithoutValidation(IntakeHeaders.Pr, "8");
         Assert.Equal(HttpStatusCode.Unauthorized, (await Send(req)).code);
         Assert.Empty(_kit.Runs.Requests);
     }
@@ -140,7 +144,7 @@ public sealed class IntakeHttpTests : IAsyncLifetime
     {
         var body = IntakeKit.Fixture("blackduck-sca.sarif.json");
         Assert.Equal(HttpStatusCode.BadRequest, (await Send(Signed(IntakeKit.Meta(sha: "not-a-sha"), body))).code);
-        _kit.Options.AllowedRepos = ["synthetic-org/*"];
+        _app.Services.GetRequiredService<IOptions<IntakeOptions>>().Value.AllowedRepos = ["synthetic-org/*"];   // test-only runtime change
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(Signed(IntakeKit.Meta(repo: "other-org/app"), body))).code);
         Assert.Equal(HttpStatusCode.Accepted, (await Send(Signed(IntakeKit.Meta(runId: "allowed"), body))).code);
     }

@@ -1,13 +1,17 @@
+using Microsoft.Extensions.DependencyInjection;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Core;
 
 namespace SecAgent.Intake.Storage;
 
-/// <summary>Raw payloads in the local Blob stand-in (container "raw", write-once, sha256-hashed), the same store the scanners use.
-/// Azure: implement <see cref="IRawFindingStore"/> over Azure.Storage.Blobs (container "raw", immutability policy, managed identity);
-/// the uri scheme stays blob://raw/… so evidence references do not change.</summary>
-public sealed class LocalRawFindingStore(LocalBlobStore blob) : IRawFindingStore
+/// <summary>Local adapter for <see cref="IRawFindingStore"/>: the write-once local blob store (container "raw", sha256-hashed), the same
+/// folder layout the scanners use. The Azure adapter (SecAgent.Intake.Azure) keeps the blob://raw/… URI scheme.</summary>
+public sealed class LocalRawFindingStore([FromKeyedServices(LocalRawFindingStore.BlobStoreKey)] LocalBlobStore blob) : IRawFindingStore
 {
     public const string Container = "raw";
+    /// <summary>DI key of the <see cref="LocalBlobStore"/> this adapter writes to (rooted at Intake:RawStoreRoot).</summary>
+    public const string BlobStoreKey = "intake-raw";
+
     public RawRef Put(string path, byte[] content)
     {
         var (uri, hash) = blob.Put(Container, path, content);

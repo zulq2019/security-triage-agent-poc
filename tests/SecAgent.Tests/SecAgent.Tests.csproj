@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="../../src/SecAgent.Agents/SecAgent.Agents.csproj" />
     <ProjectReference Include="../../src/SecAgent.Intake/SecAgent.Intake.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />

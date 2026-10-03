@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
+using SecAgent.Abstractions;
 using SecAgent.Agents.Llm;
 using SecAgent.Agents.Repo;
 using SecAgent.Agents.Scanners;
@@ -36,7 +37,7 @@ public sealed class ScannersExecutor(AgentServices s, RunState r) : StepBase("sc
         var sets = await Task.WhenAll(hs, bs);
         int published = 0;
         // Findings pushed by an external scanner (Black Duck via the intake endpoint) for this exact head commit join the head batch.
-        var external = S.External?.ForHead(pr.Repo, pr.HeadSha) ?? [];
+        var external = S.External.ForHead(pr.Repo, pr.HeadSha);
         foreach (var x in external)
         {
             foreach (var f in x.Findings)

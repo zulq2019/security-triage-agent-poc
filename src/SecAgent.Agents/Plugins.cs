@@ -18,25 +18,6 @@ public interface IScannerAdapter
     List<Finding> Normalise(RawOutput raw, ScanTarget target, HashSet<string> trackedFiles);
 }
 
-/// <summary>Findings pushed to us by an external scanner (e.g. Black Duck via the SARIF intake, src/SecAgent.Intake) for one commit.
-/// The scanners step adds them to the head batch of a PR run, so they are deduped, triaged and routed like local scanner findings.</summary>
-public interface IExternalFindingSource
-{
-    /// <summary>Canonical findings received for this repo at this exact head commit (empty when none). Findings for an older head SHA are not returned.</summary>
-    IReadOnlyList<ExternalFindingBatch> ForHead(string repo, string headSha);
-}
-
-public sealed record ExternalFindingBatch(string IntakeId, string Scanner, string ScannerVersion, string RawEvidenceRef, List<Finding> Findings);
-
-/// <summary>Verifier policy for findings that came from an external scanner. The local rescan (gitleaks/Trivy/Semgrep) cannot prove a
-/// Black Duck finding is gone (different rule ids, BDSA advisories, component naming), so the verifier never reports such a fix as verified.</summary>
-public static class ExternalFindingPolicy
-{
-    public const string IntakeIdAttribute = "intake_id";
-    public static bool IsExternal(Finding f) => f.Attributes.ContainsKey(IntakeIdAttribute);
-    public static List<Finding> NotLocallyVerifiable(IEnumerable<Finding> findings) => findings.Where(IsExternal).ToList();
-}
-
 public sealed record FixContext(Workflow.RunState Run, string FixerId, string GroupKey, List<Finding> Findings, int AttemptNo, string? PriorFailure,
     string Worktree, string Branch, Feed Feed, string EntryId, CancellationToken Ct)
 {

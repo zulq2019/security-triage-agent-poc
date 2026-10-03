@@ -1,11 +1,15 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Options;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Core;
+using SecAgent.Intake.Configuration;
 
 namespace SecAgent.Intake.Parsers;
 
 /// <summary>Where each canonical field is read from in Black Duck rapid / stateless scan JSON. Every entry is a list of candidate
-/// property names (first present wins, case-insensitive). THIS IS THE ONE PLACE TO ADJUST when the customer's real sample arrives.
+/// property names (first present wins, case-insensitive). THIS IS THE ONE PLACE TO ADJUST when the customer's real sample arrives
+/// (registered as a singleton in DI: replace the registration to use a different map without touching the parser).
 /// <para>Built from public sources, not from a customer sample:</para>
 /// <list type="bullet">
 /// <item>Detect writes "&lt;project&gt;_&lt;version&gt;_BlackDuck_DeveloperMode_Result.json" as gson of List&lt;DeveloperScansScanView&gt;
@@ -56,29 +60,32 @@ public sealed record BlackDuckRapidFieldMap
     {
         ["BLOCKER"] = "critical", ["CRITICAL"] = "high", ["MAJOR"] = "medium", ["MINOR"] = "low", ["TRIVIAL"] = "info", ["UNSPECIFIED"] = "medium",
     };
-
-    public static readonly BlackDuckRapidFieldMap Default = new();
 }
 
 /// <summary>Black Duck rapid / stateless scan JSON → canonical findings, behind the same <see cref="IFindingParser"/> as SARIF.
 /// One component item with policy-violating vulnerabilities = ONE vulnerable_dependency finding (same grouping as Black Duck's default
 /// grouped SARIF: "upgrade component X fixes these advisories"); each policy-violating licence = one licence finding.
 /// Component-only policy violations (e.g. "unknown version") carry no vulnerability or licence detail and are counted in Notes, not mapped.</summary>
-public sealed class BlackDuckRapidScanParser(IntakeOptions options, SecretMasker masker, BlackDuckRapidFieldMap? map = null) : IFindingParser
+public sealed class BlackDuckRapidScanParser(IOptions<IntakeOptions> options, SecretMasker masker, BlackDuckRapidFieldMap map) : IFindingParser, IFileNameFormatHint
 {
-    readonly BlackDuckRapidFieldMap M = map ?? BlackDuckRapidFieldMap.Default;
+    readonly BlackDuckRapidFieldMap M = map;
+    IntakeOptions Limits => options.Value;
     public string Format => IntakeFormats.BlackDuckRapid;
+    public string RawFileExtension => "rapid.json";
+    /// <summary>Detect names the file "&lt;project&gt;_&lt;version&gt;_BlackDuck_DeveloperMode_Result.json".</summary>
+    public bool Recognises(string fileName) =>
+        fileName.Contains("rapid", StringComparison.OrdinalIgnoreCase) || fileName.Contains("DeveloperMode", StringComparison.OrdinalIgnoreCase);
     public const string ToolVersion = "rapid-scan";
 
     public ParseOutcome Parse(ReadOnlyMemory<byte> payload, IntakeMetadata meta)
     {
-        var root = ParserUtil.ParseJson(payload, options.MaxJsonDepth);
+        var root = ParserUtil.ParseJson(payload, Limits.MaxJsonDepth);
         JsonArray items; bool locationFile = false;
         if (root is JsonArray a) items = a;
         else if (root is JsonObject o && ParserUtil.Get(o, M.ItemsWrapper) is JsonArray wrapped) items = wrapped;
         else if (root is JsonObject o2 && ParserUtil.Get(o2, M.LocationComponentList) is JsonArray cl) { items = cl; locationFile = true; }
         else throw new IntakeRejectedException(422, "Black Duck rapid-scan JSON must be an array of component results, {\"items\": […]}, or a component-location-analysis {\"componentList\": […]}");
-        if (items.Count > options.MaxResults) throw new IntakeRejectedException(413, $"rapid-scan JSON has {items.Count} components; the limit is {options.MaxResults} (Intake:MaxResults)");
+        if (items.Count > Limits.MaxResults) throw new IntakeRejectedException(413, $"rapid-scan JSON has {items.Count} components; the limit is {Limits.MaxResults} (Intake:MaxResults)");
 
         var findings = new List<Finding>();
         var notes = new List<string>();

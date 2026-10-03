@@ -1,7 +1,10 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Options;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Core;
+using SecAgent.Intake.Configuration;
 
 namespace SecAgent.Intake.Parsers;
 
@@ -16,9 +19,11 @@ namespace SecAgent.Intake.Parsers;
 /// <item>issue type: secret (tags/rule id) → vulnerable_dependency (advisory id / component / SCA tags) → licence (licence property) → unsafe_code.</item>
 /// </list>
 /// Results with kind pass/notApplicable, baselineState "absent", or a producer suppression are skipped and counted in Notes.</summary>
-public sealed partial class SarifParser(IntakeOptions options, SecretMasker masker) : IFindingParser
+public sealed partial class SarifParser(IOptions<IntakeOptions> options, SecretMasker masker) : IFindingParser
 {
     public string Format => IntakeFormats.Sarif;
+    public string RawFileExtension => "sarif.json";
+    IntakeOptions Limits => options.Value;
 
     static readonly string[] CveProps = ["cve", "cves", "cveId", "cveIds", "cve_ids", "secagent.cve_ids"];
     static readonly string[] VulnIdProps = ["vulnerabilityId", "vulnerabilityIds", "vulnerabilities", "advisoryId", "advisories", "bdsa"];
@@ -33,12 +38,12 @@ public sealed partial class SarifParser(IntakeOptions options, SecretMasker mask
 
     public ParseOutcome Parse(ReadOnlyMemory<byte> payload, IntakeMetadata meta)
     {
-        var root = ParserUtil.ParseJson(payload, options.MaxJsonDepth) as JsonObject ?? throw Bad("SARIF root must be a JSON object");
+        var root = ParserUtil.ParseJson(payload, Limits.MaxJsonDepth) as JsonObject ?? throw Bad("SARIF root must be a JSON object");
         var version = ParserUtil.AsString(root["version"]);
         if (version != "2.1.0") throw Bad($"unsupported SARIF version '{version ?? "(missing)"}': only 2.1.0 is accepted");
         if (root["runs"] is not JsonArray runs) throw Bad("SARIF 'runs' must be an array");
         var total = runs.Sum(r => (r?["results"] as JsonArray)?.Count ?? 0);
-        if (total > options.MaxResults) throw new IntakeRejectedException(413, $"SARIF has {total} results; the limit is {options.MaxResults} (Intake:MaxResults)");
+        if (total > Limits.MaxResults) throw new IntakeRejectedException(413, $"SARIF has {total} results; the limit is {Limits.MaxResults} (Intake:MaxResults)");
 
         var findings = new List<Finding>();
         var notes = new List<string>();
@@ -209,7 +214,7 @@ public sealed partial class SarifParser(IntakeOptions options, SecretMasker mask
     public byte[] Redact(ReadOnlyMemory<byte> payload, ParseOutcome parsed)
     {
         if (!parsed.Findings.Any(f => f.IssueType == IssueTypes.Secret)) return ParserUtil.MaskSecrets(payload.Span, masker);
-        var root = ParserUtil.ParseJson(payload, options.MaxJsonDepth);
+        var root = ParserUtil.ParseJson(payload, Limits.MaxJsonDepth);
         Strip(root);
         return ParserUtil.MaskSecrets(Encoding.UTF8.GetBytes(root.ToJsonString()), masker);
         static void Strip(JsonNode? n)

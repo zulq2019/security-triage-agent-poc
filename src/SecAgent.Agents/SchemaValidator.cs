@@ -1,26 +1,29 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Json.Schema;
+using SecAgent.Abstractions;
 using SecAgent.Core;
 
 namespace SecAgent.Agents;
 
-/// <summary>Validates adapter and agent outputs against the versioned JSON Schemas in rules/schema (section 7.1).</summary>
-public sealed class SchemaValidator(ConfigSnapshot cfg)
+/// <summary>Compiled JSON Schemas, keyed by name + content hash. Register one instance per container (singleton) and inject it.
+/// Each schema is built with its own <see cref="SchemaRegistry"/>, so JsonSchema.Net's global $id registry is never touched and several
+/// caches (e.g. one per test) can coexist without "Overwriting registered schemas is not permitted".</summary>
+public sealed class JsonSchemaCache
 {
-    // Process-wide: JsonSchema.Net registers each schema's $id globally, so a second validator instance building the same schema
-    // would throw "Overwriting registered schemas is not permitted". Keyed by content so a changed schema is still rebuilt.
-    static readonly Dictionary<string, JsonSchema> Cache = [];
+    readonly ConcurrentDictionary<string, Lazy<JsonSchema>> _schemas = new();
 
-    public JsonSchema Get(string name)
-    {
-        var text = cfg.Schemas[name];
-        var key = name + "|" + Hashing.Sha256(text);
-        lock (Cache)
-        {
-            if (!Cache.TryGetValue(key, out var s)) Cache[key] = s = JsonSchema.FromText(text, new BuildOptions { SchemaRegistry = new SchemaRegistry() });
-            return s;
-        }
-    }
+    public int Count => _schemas.Count;
+
+    public JsonSchema GetOrCompile(string name, string schemaText) =>
+        _schemas.GetOrAdd(name + "|" + Hashing.Sha256(schemaText),
+            _ => new Lazy<JsonSchema>(() => JsonSchema.FromText(schemaText, new BuildOptions { SchemaRegistry = new SchemaRegistry() }))).Value;
+}
+
+/// <summary>Validates adapter and agent outputs against the versioned JSON Schemas in rules/schema (section 7.1).</summary>
+public sealed class SchemaValidator(ConfigSnapshot cfg, JsonSchemaCache cache) : IFindingSchemaValidator
+{
+    public JsonSchema Get(string name) => cache.GetOrCompile(name, cfg.Schemas[name]);
 
     public JsonElement SchemaElement(string name) => JsonDocument.Parse(cfg.Schemas[name]).RootElement;
 

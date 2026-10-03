@@ -1,12 +1,21 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Options;
+using SecAgent.Abstractions;
+using SecAgent.Abstractions.Intake;
 using SecAgent.Agents;
 using SecAgent.Core;
 using SecAgent.Intake;
+using SecAgent.Intake.Application;
 using SecAgent.Intake.Blob;
+using SecAgent.Intake.Configuration;
 using SecAgent.Intake.Parsers;
 using SecAgent.Intake.Runs;
+using SecAgent.Intake.Security;
 using SecAgent.Intake.Storage;
 using Xunit;
 
@@ -23,31 +32,92 @@ public sealed class FakeRunStarter : IRunStarter
     }
 }
 
-/// <summary>Temp data root + a fully wired IntakeService (real parsers, real file ledger, real write-once blob store, fake run starter).</summary>
+/// <summary>Stands in for the dashboard's RunService adapter.</summary>
+public sealed class FakePrRunLauncher : IPrRunLauncher
+{
+    public List<(string Repo, int Pr)> Started { get; } = [];
+    public Guid RunId { get; } = Guid.NewGuid();
+    public Task<Guid> StartPrRunAsync(string repo, int prNumber, CancellationToken ct) { lock (Started) Started.Add((repo, prNumber)); return Task.FromResult(RunId); }
+}
+
+public sealed class FakeRunAdmission : IRunAdmission
+{
+    public volatile bool Open = true;
+    public bool CanStartRun => Open;
+}
+
+/// <summary>Controllable clock for the HMAC window and lease checks.</summary>
+public sealed class ManualClock(DateTimeOffset now) : TimeProvider
+{
+    public DateTimeOffset Now { get; set; } = now;
+    public override DateTimeOffset GetUtcNow() => Now;
+}
+
+public sealed class FixedSecret(string? secret) : IIntakeSecretProvider
+{
+    public string? GetSecret() => secret;
+}
+
+/// <summary>Temp data root + the intake wired through its real composition root (services.AddSecAgentIntake) with test doubles only for
+/// the pipeline-side ports (run launcher, admission) and, by default, the run starter.</summary>
 public sealed class IntakeKit : IDisposable
 {
     public const string Secret = "synthetic-intake-test-secret";
     public const string Sha = "0123456789abcdef0123456789abcdef01234567";
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "secagent-intake-" + Guid.NewGuid().ToString("N")[..8]);
-    public IntakeOptions Options { get; }
+    readonly string _secretEnv = "SECAGENT_INTAKE_TEST_SECRET_" + Guid.NewGuid().ToString("N")[..6];
+    public ServiceProvider Services { get; }
     public FakeRunStarter Runs { get; } = new();
-    public FileIntakeLedger Ledger { get; }
-    public LocalBlobStore Blob { get; }
-    public IntakeService Service { get; }
-    public SecretMasker Masker { get; } = new();
-    /// <summary>Shared validator (SchemaValidator caches compiled schemas process-wide).</summary>
-    public static readonly SchemaValidator Validator = new(TestEnv.Cfg);
+    public FakePrRunLauncher Launcher { get; } = new();
+    public FakeRunAdmission Admission { get; } = new();
 
-    public IntakeKit(Action<IntakeOptions>? configure = null)
+    readonly Action<IntakeOptions>? _configure;
+    readonly bool _fakeRunStarter;
+    readonly Action<IServiceCollection>? _services;
+
+    public IntakeKit(Action<IntakeOptions>? configure = null, bool fakeRunStarter = true, Action<IServiceCollection>? services = null)
     {
         _ = TestEnv.Cfg;   // loads SECAGENT_HMAC_KEY (secret findings are HMAC'd)
-        Options = new IntakeOptions { HmacSecretEnv = "SECAGENT_INTAKE_TEST_SECRET_" + Guid.NewGuid().ToString("N")[..6], DropFolder = Path.Combine(Root, "drop") };
-        Environment.SetEnvironmentVariable(Options.HmacSecretEnv, Secret);
-        configure?.Invoke(Options);
-        Ledger = new FileIntakeLedger(Path.Combine(Root, "ledger"));
-        Blob = new LocalBlobStore(Path.Combine(Root, "blob"));
-        Service = new IntakeService(Options, [new SarifParser(Options, Masker), new BlackDuckRapidScanParser(Options, Masker)],
-            new LocalRawFindingStore(Blob), Ledger, Runs, IntakeKit.Validator);
+        Environment.SetEnvironmentVariable(_secretEnv, Secret);
+        (_configure, _fakeRunStarter, _services) = (configure, fakeRunStarter, services);
+        Configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Intake:StorageRoot"] = Root, ["Intake:HmacSecretEnv"] = _secretEnv,
+        }).Build();
+        var sc = new ServiceCollection();
+        Wire(sc);
+        Services = sc.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
+        Services.GetRequiredService<IStartupValidator>().Validate();   // what ValidateOnStart does in a host
+    }
+
+    public IConfiguration Configuration { get; }
+
+    /// <summary>The registrations a host makes (pipeline-side ports as test doubles) + the intake's composition root. Also used by the HTTP tests.</summary>
+    public void Wire(IServiceCollection sc)
+    {
+        sc.AddSingleton(TestEnv.Cfg);
+        sc.AddSingleton<JsonSchemaCache>();
+        sc.AddSingleton<IFindingSchemaValidator, SchemaValidator>();
+        sc.AddSingleton<IPrRunLauncher>(Launcher);
+        sc.AddSingleton<IRunAdmission>(Admission);
+        sc.AddSecAgentIntake(Configuration);
+        if (_configure != null) sc.Configure(_configure);
+        if (_fakeRunStarter) sc.Replace(ServiceDescriptor.Singleton<IRunStarter>(Runs));
+        _services?.Invoke(sc);
+    }
+
+    public IntakeOptions Options => Services.GetRequiredService<IOptions<IntakeOptions>>().Value;
+    public IIntakeAcceptor Acceptor => Services.GetRequiredService<IIntakeAcceptor>();
+    public IIntakeMetadataReader Metadata => Services.GetRequiredService<IIntakeMetadataReader>();
+    public FileIntakeLedger Ledger => (FileIntakeLedger)Services.GetRequiredService<IIntakeLedger>();
+    public LocalBlobStore Blob => Services.GetRequiredKeyedService<LocalBlobStore>(LocalRawFindingStore.BlobStoreKey);
+    public SecretMasker Masker => Services.GetRequiredService<SecretMasker>();
+    public static SchemaValidator NewValidator() => new(TestEnv.Cfg, new JsonSchemaCache());
+    public static IOptions<IntakeOptions> Defaults(Action<IntakeOptions>? configure = null)
+    {
+        var o = new IntakeOptions();
+        configure?.Invoke(o);
+        return Microsoft.Extensions.Options.Options.Create(o);
     }
 
     public static byte[] Fixture(string name) => File.ReadAllBytes(Path.Combine(TestEnv.RepoRoot, "tests", "SecAgent.Tests", "Fixtures", "intake", name));
@@ -57,7 +127,8 @@ public sealed class IntakeKit : IDisposable
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(Options.HmacSecretEnv, null);
+        Services.DisposeAsync().AsTask().GetAwaiter().GetResult();   // async: some adapters (Service Bus) are IAsyncDisposable only
+        Environment.SetEnvironmentVariable(_secretEnv, null);
         try
         {
             foreach (var f in Directory.GetFiles(Root, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
@@ -72,7 +143,7 @@ public class SarifParserTests
     static ParseOutcome Parse(string fixture, IntakeMetadata? meta = null)
     {
         _ = TestEnv.Cfg;
-        return new SarifParser(new IntakeOptions(), new SecretMasker()).Parse(IntakeKit.Fixture(fixture), meta ?? IntakeKit.Meta());
+        return new SarifParser(IntakeKit.Defaults(), new SecretMasker()).Parse(IntakeKit.Fixture(fixture), meta ?? IntakeKit.Meta());
     }
 
     [Fact]
@@ -159,7 +230,7 @@ public class SarifParserTests
     {
         var masker = new SecretMasker();
         _ = TestEnv.Cfg;
-        var parser = new SarifParser(new IntakeOptions(), masker);
+        var parser = new SarifParser(IntakeKit.Defaults(), masker);
         var body = IntakeKit.Fixture("secret.sarif.json");
         var p = parser.Parse(body, IntakeKit.Meta());
         var f = Assert.Single(p.Findings);
@@ -181,7 +252,7 @@ public class SarifParserTests
     [InlineData("{\"version\":\"2.1.0\",", 400, "not valid JSON")]
     public void Invalid_sarif_is_rejected(string body, int code, string why)
     {
-        var e = Assert.Throws<IntakeRejectedException>(() => new SarifParser(new IntakeOptions(), new SecretMasker()).Parse(Encoding.UTF8.GetBytes(body), IntakeKit.Meta()));
+        var e = Assert.Throws<IntakeRejectedException>(() => new SarifParser(IntakeKit.Defaults(), new SecretMasker()).Parse(Encoding.UTF8.GetBytes(body), IntakeKit.Meta()));
         Assert.Equal(code, e.StatusCode);
         Assert.Contains(why, e.Message);
     }
@@ -191,14 +262,14 @@ public class SarifParserTests
     {
         var results = string.Join(",", Enumerable.Range(0, 6).Select(i => $"{{\"ruleId\":\"r{i}\",\"message\":{{\"text\":\"m\"}}}}"));
         var body = Encoding.UTF8.GetBytes($"{{\"version\":\"2.1.0\",\"runs\":[{{\"tool\":{{\"driver\":{{\"name\":\"x\"}}}},\"results\":[{results}]}}]}}");
-        var e = Assert.Throws<IntakeRejectedException>(() => new SarifParser(new IntakeOptions { MaxResults = 5 }, new SecretMasker()).Parse(body, IntakeKit.Meta()));
+        var e = Assert.Throws<IntakeRejectedException>(() => new SarifParser(IntakeKit.Defaults(o => o.MaxResults = 5), new SecretMasker()).Parse(body, IntakeKit.Meta()));
         Assert.Equal(413, e.StatusCode);
     }
 
     [Fact]
     public void Every_sarif_fixture_finding_passes_the_canonical_schema()
     {
-        var v = IntakeKit.Validator;
+        var v = IntakeKit.NewValidator();
         foreach (var fx in new[] { "blackduck-sca.sarif.json", "secret.sarif.json" })
             foreach (var f in Parse(fx).Findings)
             {
@@ -210,7 +281,7 @@ public class SarifParserTests
 
 public class BlackDuckRapidParserTests
 {
-    static ParseOutcome Parse(string fixture) => new BlackDuckRapidScanParser(new IntakeOptions(), new SecretMasker()).Parse(IntakeKit.Fixture(fixture), IntakeKit.Meta(IntakeFormats.BlackDuckRapid));
+    static ParseOutcome Parse(string fixture) => new BlackDuckRapidScanParser(IntakeKit.Defaults(), new SecretMasker(), new BlackDuckRapidFieldMap()).Parse(IntakeKit.Fixture(fixture), IntakeKit.Meta(IntakeFormats.BlackDuckRapid));
 
     [Fact]
     public void Component_with_policy_vulnerabilities_maps_to_one_finding()
@@ -251,7 +322,7 @@ public class BlackDuckRapidParserTests
     public void Items_wrapper_and_component_location_shapes_are_accepted()
     {
         var wrapped = Encoding.UTF8.GetBytes("{\"items\":" + Encoding.UTF8.GetString(IntakeKit.Fixture("blackduck-rapid.json")) + "}");
-        Assert.Equal(3, new BlackDuckRapidScanParser(new IntakeOptions(), new SecretMasker()).Parse(wrapped, IntakeKit.Meta(IntakeFormats.BlackDuckRapid)).Findings.Count);
+        Assert.Equal(3, new BlackDuckRapidScanParser(IntakeKit.Defaults(), new SecretMasker(), new BlackDuckRapidFieldMap()).Parse(wrapped, IntakeKit.Meta(IntakeFormats.BlackDuckRapid)).Findings.Count);
         var f = Assert.Single(Parse("blackduck-components-with-locations.json").Findings);
         Assert.Equal(("pkg:maven/org.synthetic/synthetic-yaml", "1.30", "1.33"), (f.ComponentName, f.ComponentVersion, f.FixedVersion));
         Assert.Equal(("build.gradle.kts", 12), (f.FilePath, f.LineStart!.Value));
@@ -270,7 +341,7 @@ public class BlackDuckRapidParserTests
     [Fact]
     public void Non_array_payload_is_rejected()
     {
-        var e = Assert.Throws<IntakeRejectedException>(() => new BlackDuckRapidScanParser(new IntakeOptions(), new SecretMasker()).Parse(Encoding.UTF8.GetBytes("{\"version\":\"2.1.0\"}"), IntakeKit.Meta(IntakeFormats.BlackDuckRapid)));
+        var e = Assert.Throws<IntakeRejectedException>(() => new BlackDuckRapidScanParser(IntakeKit.Defaults(), new SecretMasker(), new BlackDuckRapidFieldMap()).Parse(Encoding.UTF8.GetBytes("{\"version\":\"2.1.0\"}"), IntakeKit.Meta(IntakeFormats.BlackDuckRapid)));
         Assert.Equal(422, e.StatusCode);
     }
 }
@@ -282,22 +353,22 @@ public class IntakeHmacTests
 
     static Dictionary<string, string> Signed(IntakeMetadata m, byte[] body, string secret = IntakeKit.Secret, long? ts = null)
     {
-        var h = HmacIntakeAuthenticator.HeadersFor(m);
+        var h = IntakeSignature.HeadersFor(m);
         var t = (ts ?? Now.ToUnixTimeSeconds()).ToString();
-        h[HmacIntakeAuthenticator.TimestampHeader] = t;
-        h[HmacIntakeAuthenticator.SignatureHeader] = HmacIntakeAuthenticator.Sign(secret, m.Format, h, t, body);
+        h[IntakeHeaders.Timestamp] = t;
+        h[IntakeHeaders.Signature] = IntakeSignature.Sign(secret, m.Format, h, t, body);
         return h;
     }
-    static HmacIntakeAuthenticator Auth(string? secret = IntakeKit.Secret) => new(() => secret, 300);
+    static HmacIntakeAuthenticator Auth(string? secret = IntakeKit.Secret) => new(new FixedSecret(secret), IntakeKit.Defaults(), new ManualClock(Now));
 
     [Fact]
-    public void Valid_signature_is_accepted() => Assert.True(Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body), Body, Now).Ok);
+    public void Valid_signature_is_accepted() => Assert.True(Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body), Body).Ok);
 
     [Fact]
     public void Tampered_body_is_rejected()
     {
         var h = Signed(IntakeKit.Meta(), Body);
-        var r = Auth().Authenticate("sarif", h, Encoding.UTF8.GetBytes("{\"version\":\"2.1.0\",\"runs\":[{}]}"), Now);
+        var r = Auth().Authenticate("sarif", h, Encoding.UTF8.GetBytes("{\"version\":\"2.1.0\",\"runs\":[{}]}"));
         Assert.False(r.Ok); Assert.Contains("mismatch", r.Error);
     }
 
@@ -310,31 +381,31 @@ public class IntakeHmacTests
     {
         var h = Signed(IntakeKit.Meta(), Body);
         h[header] = value;
-        Assert.False(Auth().Authenticate("sarif", h, Body, Now).Ok);
+        Assert.False(Auth().Authenticate("sarif", h, Body).Ok);
     }
 
     [Fact]
-    public void Format_is_part_of_the_signature() => Assert.False(Auth().Authenticate("blackduck-rapid", Signed(IntakeKit.Meta(), Body), Body, Now).Ok);
+    public void Format_is_part_of_the_signature() => Assert.False(Auth().Authenticate("blackduck-rapid", Signed(IntakeKit.Meta(), Body), Body).Ok);
 
     [Fact]
     public void Wrong_secret_stale_timestamp_missing_headers_and_unconfigured_server_are_rejected()
     {
-        Assert.False(Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body, secret: "another-secret"), Body, Now).Ok);
-        var stale = Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body, ts: Now.ToUnixTimeSeconds() - 301), Body, Now);
+        Assert.False(Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body, secret: "another-secret"), Body).Ok);
+        var stale = Auth().Authenticate("sarif", Signed(IntakeKit.Meta(), Body, ts: Now.ToUnixTimeSeconds() - 301), Body);
         Assert.False(stale.Ok); Assert.Contains("window", stale.Error);
-        var noSig = Signed(IntakeKit.Meta(), Body); noSig.Remove(HmacIntakeAuthenticator.SignatureHeader);
-        Assert.False(Auth().Authenticate("sarif", noSig, Body, Now).Ok);
-        var noTs = Signed(IntakeKit.Meta(), Body); noTs.Remove(HmacIntakeAuthenticator.TimestampHeader);
-        Assert.False(Auth().Authenticate("sarif", noTs, Body, Now).Ok);
-        Assert.Contains("not configured", Auth(null).Authenticate("sarif", Signed(IntakeKit.Meta(), Body), Body, Now).Error);
+        var noSig = Signed(IntakeKit.Meta(), Body); noSig.Remove(IntakeHeaders.Signature);
+        Assert.False(Auth().Authenticate("sarif", noSig, Body).Ok);
+        var noTs = Signed(IntakeKit.Meta(), Body); noTs.Remove(IntakeHeaders.Timestamp);
+        Assert.False(Auth().Authenticate("sarif", noTs, Body).Ok);
+        Assert.Contains("not configured", Auth(null).Authenticate("sarif", Signed(IntakeKit.Meta(), Body), Body).Error);
     }
 
     [Fact]
     public void Upper_case_hex_signature_is_accepted()
     {
         var h = Signed(IntakeKit.Meta(), Body);
-        h[HmacIntakeAuthenticator.SignatureHeader] = "sha256=" + h[HmacIntakeAuthenticator.SignatureHeader][7..].ToUpperInvariant();
-        Assert.True(Auth().Authenticate("sarif", h, Body, Now).Ok);
+        h[IntakeHeaders.Signature] = "sha256=" + h[IntakeHeaders.Signature][7..].ToUpperInvariant();
+        Assert.True(Auth().Authenticate("sarif", h, Body).Ok);
     }
 }
 
@@ -346,7 +417,7 @@ public class IntakeServiceTests
     public async Task Accepts_stores_raw_and_canonical_and_enqueues_once()
     {
         using var k = new IntakeKit();
-        var r = await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
+        var r = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
         Assert.Equal(202, r.StatusCode);
         var req = Assert.Single(k.Runs.Requests);
         Assert.Equal(("synthetic-org/sample-orders", 7, "pr", 6), (req.Repo, req.PrNumber!.Value, req.Mode, req.Findings));
@@ -357,7 +428,7 @@ public class IntakeServiceTests
         var canonical = JsonSerializer.Deserialize<List<Finding>>(k.Blob.Read(rec.CanonicalUri!), Schema.Json)!;
         Assert.Equal(6, canonical.Count);
         Assert.All(canonical, f => { Assert.Equal(rec.RawUri, f.RawEvidenceRef); Assert.Equal(rec.IntakeId, f.Attributes[ExternalFindingPolicy.IntakeIdAttribute]); });
-        Assert.All(canonical, f => Assert.Null(IntakeKit.Validator.ValidateFinding(f)));
+        Assert.All(canonical, f => Assert.Null(IntakeKit.NewValidator().ValidateFinding(f)));
     }
 
     [Fact]
@@ -365,12 +436,12 @@ public class IntakeServiceTests
     {
         using var k = new IntakeKit();
         var body = IntakeKit.Fixture("blackduck-sca.sarif.json");
-        Assert.Equal(202, (await k.Service.AcceptAsync(IntakeKit.Meta(), body, "test", default)).StatusCode);
-        var again = await k.Service.AcceptAsync(IntakeKit.Meta(), body, "test", default);
+        Assert.Equal(202, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default)).StatusCode);
+        var again = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default);
         Assert.Equal((200, "duplicate"), (again.StatusCode, Status(again)));
         Assert.Single(k.Runs.Requests);
         // A GitHub re-run has a new run attempt → new key → processed.
-        Assert.Equal(202, (await k.Service.AcceptAsync(IntakeKit.Meta(runId: "1001-2"), body, "test", default)).StatusCode);
+        Assert.Equal(202, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(runId: "1001-2"), body, "test", default)).StatusCode);
         Assert.Equal(2, k.Runs.Requests.Count);
     }
 
@@ -378,8 +449,8 @@ public class IntakeServiceTests
     public async Task Different_payload_under_the_same_key_is_a_conflict()
     {
         using var k = new IntakeKit();
-        await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
-        var r = await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default);
+        await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
+        var r = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default);
         Assert.Equal(409, r.StatusCode);
         Assert.Single(k.Runs.Requests);
     }
@@ -389,7 +460,7 @@ public class IntakeServiceTests
     {
         using var k = new IntakeKit();
         var body = IntakeKit.Fixture("blackduck-rapid.json");
-        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => k.Service.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid), body, "test", default))));
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid), body, "test", default))));
         Assert.Single(k.Runs.Requests);
         Assert.Equal(1, results.Count(r => r.StatusCode == 202));
         Assert.All(results, r => Assert.Contains(r.StatusCode, new[] { 200, 202 }));
@@ -399,24 +470,24 @@ public class IntakeServiceTests
     public async Task Oversize_and_invalid_payloads_are_rejected_and_store_nothing()
     {
         using var k = new IntakeKit(o => o.MaxBodyBytes = 1024);
-        var big = await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
+        var big = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("blackduck-sca.sarif.json"), "test", default);
         Assert.Equal(413, big.StatusCode);
-        var bad = await k.Service.AcceptAsync(IntakeKit.Meta(), Encoding.UTF8.GetBytes("{\"version\":\"1.0\",\"runs\":[]}"), "test", default);
+        var bad = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), Encoding.UTF8.GetBytes("{\"version\":\"1.0\",\"runs\":[]}"), "test", default);
         Assert.Equal((422, "rejected"), (bad.StatusCode, Status(bad)));
-        var empty = await k.Service.AcceptAsync(IntakeKit.Meta(), Array.Empty<byte>(), "test", default);
+        var empty = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), Array.Empty<byte>(), "test", default);
         Assert.Equal(400, empty.StatusCode);
         Assert.Empty(k.Runs.Requests);
         Assert.Empty(k.Ledger.All());                                   // a rejected payload does not burn the idempotency key
         Assert.False(Directory.Exists(Path.Combine(k.Root, "blob", "raw")));
         // the same key still works with a valid payload
-        Assert.Equal(202, (await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default)).StatusCode);
+        Assert.Equal(202, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default)).StatusCode);
     }
 
     [Fact]
     public async Task Secret_value_never_reaches_disk()
     {
         using var k = new IntakeKit();
-        Assert.Equal(202, (await k.Service.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default)).StatusCode);
+        Assert.Equal(202, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(), IntakeKit.Fixture("secret.sarif.json"), "test", default)).StatusCode);
         foreach (var f in Directory.GetFiles(k.Root, "*", SearchOption.AllDirectories))
             Assert.DoesNotContain("AKIAIOSFODNN7EXAMPLE", File.ReadAllText(f));   // gitleaks:allow (synthetic)
     }
@@ -432,9 +503,9 @@ public class IntakeServiceTests
     public void Metadata_is_validated(string header, string value, int code)
     {
         using var k = new IntakeKit(o => o.AllowedRepos = ["synthetic-org/*"]);
-        var h = HmacIntakeAuthenticator.HeadersFor(IntakeKit.Meta());
+        var h = IntakeSignature.HeadersFor(IntakeKit.Meta());
         h[header] = value;
-        var e = Assert.Throws<IntakeRejectedException>(() => k.Service.ReadMetadata("sarif", h));
+        var e = Assert.Throws<IntakeRejectedException>(() => k.Metadata.Read("sarif", h));
         Assert.Equal(code, e.StatusCode);
     }
 
@@ -442,8 +513,8 @@ public class IntakeServiceTests
     public void Unknown_format_is_404_and_backlog_mode_has_no_pr()
     {
         using var k = new IntakeKit();
-        Assert.Equal(404, Assert.Throws<IntakeRejectedException>(() => k.Service.ReadMetadata("cyclonedx", HmacIntakeAuthenticator.HeadersFor(IntakeKit.Meta()))).StatusCode);
-        var m = k.Service.ReadMetadata("sarif", HmacIntakeAuthenticator.HeadersFor(IntakeKit.Meta(pr: null)));
+        Assert.Equal(404, Assert.Throws<IntakeRejectedException>(() => k.Metadata.Read("cyclonedx", IntakeSignature.HeadersFor(IntakeKit.Meta()))).StatusCode);
+        var m = k.Metadata.Read("sarif", IntakeSignature.HeadersFor(IntakeKit.Meta(pr: null)));
         Assert.Equal(("backlog", "main"), (m.Mode, m.Branch));
     }
 
@@ -457,8 +528,8 @@ public class IntakeServiceTests
         k.Ledger.TryClaim(new IntakeRecord { Key = meta.IdempotencyKey, BodySha256 = Hashing.Sha256(body), Meta = meta, UpdatedAt = DateTime.UtcNow.AddMinutes(-10) }, out _);
         var inProgress = new IntakeRecord { Key = IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1").IdempotencyKey, BodySha256 = Hashing.Sha256(body) };
         k.Ledger.TryClaim(inProgress, out _);   // fresh claim held by a concurrent delivery
-        Assert.Equal(200, (await k.Service.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1"), body, "test", default)).StatusCode);
-        var r = await k.Service.AcceptAsync(meta, body, "test", default);
+        Assert.Equal(200, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1"), body, "test", default)).StatusCode);
+        var r = await k.Acceptor.AcceptAsync(meta, body, "test", default);
         Assert.Equal(202, r.StatusCode);
         Assert.Single(k.Runs.Requests);
         Assert.Equal(IntakeStatus.Queued, k.Ledger.Get(meta.IdempotencyKey)!.Status);
@@ -471,10 +542,10 @@ public class IntakeRunPathTests
     public async Task External_findings_are_served_for_the_exact_head_sha_latest_run_wins()
     {
         using var k = new IntakeKit();
-        await k.Service.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "1-1"), IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
+        await k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "1-1"), IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
         await Task.Delay(20);
-        await k.Service.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "1-2"), IntakeKit.Fixture("blackduck-components-with-locations.json"), "test", default);
-        var src = new IntakeExternalFindingSource(k.Ledger, new LocalRawFindingStore(k.Blob));
+        await k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "1-2"), IntakeKit.Fixture("blackduck-components-with-locations.json"), "test", default);
+        var src = k.Services.GetRequiredService<IExternalFindingSource>();
         var batch = Assert.Single(src.ForHead("Synthetic-Org/Sample-Orders", IntakeKit.Sha.ToUpperInvariant()));
         Assert.Equal("blackduck", batch.Scanner);
         Assert.Single(batch.Findings);                                  // run attempt 2 replaced attempt 1
@@ -495,38 +566,37 @@ public class IntakeRunPathTests
     [Fact]
     public async Task Queue_dispatcher_starts_pr_runs_and_parks_backlog_mode()
     {
-        using var k = new IntakeKit();
-        var queue = new InProcessQueue();
-        var svc = new IntakeService(k.Options, [new BlackDuckRapidScanParser(k.Options, k.Masker)], new LocalRawFindingStore(k.Blob), k.Ledger,
-            new QueueRunStarter(queue), IntakeKit.Validator);
-        await svc.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid), IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
-        await svc.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, pr: null, runId: "2002-1"), IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
+        using var k = new IntakeKit(fakeRunStarter: false);   // real local run queue (in-process IMessageQueue)
+        var meta = IntakeKit.Meta(IntakeFormats.BlackDuckRapid);
+        var backlog = IntakeKit.Meta(IntakeFormats.BlackDuckRapid, pr: null, runId: "2002-1");
+        await k.Acceptor.AcceptAsync(meta, IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
+        await k.Acceptor.AcceptAsync(backlog, IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
         // MessageId = idempotency key: a second publish of the same request is dropped by duplicate detection
-        Assert.False(queue.Publish(QueueRunStarter.QueueName, IntakeKit.Meta(IntakeFormats.BlackDuckRapid).IdempotencyKey, "dup"));
+        Assert.False(k.Services.GetRequiredService<IMessageQueue>().Publish(LocalIntakeRunQueue.QueueName, meta.IdempotencyKey, "dup"));
 
-        var started = new List<IntakeRunRequest>();
-        var free = false;
-        var runId = Guid.NewGuid();
-        var d = new IntakeRunDispatcher(queue, k.Ledger, (r, _) => { started.Add(r); return Task.FromResult(runId); }, () => free);
-        Assert.True(queue.TryReceive(QueueRunStarter.QueueName, out var first));
+        var source = k.Services.GetRequiredService<IIntakeRunSource>();
+        var d = k.Services.GetRequiredService<IntakeRunDispatcher>();
+        k.Admission.Open = false;
+        var first = await source.ReceiveAsync(default);
         var pending = d.HandleAsync(first!, default);
         await Task.Delay(300);
-        Assert.Empty(started);                                          // a run is active / kill switch on: wait
-        free = true;
+        Assert.Empty(k.Launcher.Started);                               // a run is active / kill switch on: wait
+        k.Admission.Open = true;
         await pending;
-        Assert.True(queue.TryReceive(QueueRunStarter.QueueName, out var second));
-        await d.HandleAsync(second!, default);
-        var pr = Assert.Single(started);
-        Assert.Equal(7, pr.PrNumber);
-        Assert.Equal((IntakeStatus.RunStarted, runId), (k.Ledger.Get(IntakeKit.Meta(IntakeFormats.BlackDuckRapid).IdempotencyKey)!.Status, k.Ledger.Get(IntakeKit.Meta(IntakeFormats.BlackDuckRapid).IdempotencyKey)!.RunId!.Value));
-        Assert.Equal(IntakeStatus.BacklogPending, k.Ledger.Get(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, pr: null, runId: "2002-1").IdempotencyKey)!.Status);
+        await d.HandleAsync((await source.ReceiveAsync(default))!, default);
+        Assert.Null(await source.ReceiveAsync(default));                // both completed
+        Assert.Equal(("synthetic-org/sample-orders", 7), Assert.Single(k.Launcher.Started));
+        var rec = k.Ledger.Get(meta.IdempotencyKey)!;
+        Assert.Equal((IntakeStatus.RunStarted, k.Launcher.RunId), (rec.Status, rec.RunId!.Value));
+        Assert.Equal(IntakeStatus.BacklogPending, k.Ledger.Get(backlog.IdempotencyKey)!.Status);
     }
 
     [Fact]
     public async Task Local_drop_folder_feeds_the_blob_handler()
     {
         using var k = new IntakeKit();
-        using var w = new LocalFileDropWatcher(k.Options.DropFolder, reader => new IntakeFromBlobHandler(k.Service, reader));
+        var w = k.Services.GetRequiredService<LocalFileDropWatcher>();
+        Directory.CreateDirectory(w.Folder);
         File.WriteAllBytes(Path.Combine(w.Folder, "pr7.sarif.json"), IntakeKit.Fixture("blackduck-sca.sarif.json"));
         File.WriteAllText(Path.Combine(w.Folder, "pr7.sarif.json.meta.json"), JsonSerializer.Serialize(new
         {
@@ -546,23 +616,27 @@ public class IntakeRunPathTests
     }
 
     [Fact]
-    public void Options_load_from_appsettings_with_defaults()
+    public async Task Blob_handler_infers_the_format_from_the_file_name_via_the_parser_registry()
     {
-        var o = IntakeOptions.Load(TestEnv.RepoRoot, Path.Combine(Path.GetTempPath(), "secagent-opt"));
-        Assert.True(o.Enabled);
-        Assert.Equal("SECAGENT_INTAKE_HMAC_SECRET", o.HmacSecretEnv);
-        Assert.Contains("blackduck", o.AllowedScanners);
-        Assert.Equal(26214400, o.MaxBodyBytes);
-        Assert.Contains("appsettings.json", o.Source);
-        Assert.True(o.RepoAllowed("anything/goes"));
-        Assert.True(new IntakeOptions { AllowedRepos = ["synthetic-org/*"] }.RepoAllowed("Synthetic-Org/x"));
-        Assert.False(new IntakeOptions { AllowedRepos = ["synthetic-org/*"] }.RepoAllowed("other/x"));
+        using var k = new IntakeKit();
+        Directory.CreateDirectory(k.Options.DropFolder);
+        var file = Path.Combine(k.Options.DropFolder, "orders_1.0_BlackDuck_DeveloperMode_Result.json");
+        File.WriteAllBytes(file, IntakeKit.Fixture("blackduck-rapid.json"));
+        var md = new Dictionary<string, string> { ["repo"] = "synthetic-org/sample-orders", ["pr"] = "7", ["head_sha"] = IntakeKit.Sha, ["scanner"] = "blackduck", ["run_id"] = "blob-1" };
+        var r = await k.Services.GetRequiredService<IBlobIntakeHandler>().HandleAsync(new BlobCreatedEvent(new Uri(file).AbsoluteUri, Path.GetFileName(file), new FileInfo(file).Length, md), default);
+        Assert.Equal(202, r.StatusCode);
+        Assert.Equal(IntakeFormats.BlackDuckRapid, k.Ledger.All().Single().Meta!.Format);
+        // the local blob reader refuses files outside the drop folder
+        var outside = Path.Combine(k.Root, "outside.json");
+        File.WriteAllText(outside, "[]");
+        await Assert.ThrowsAsync<IOException>(() => k.Services.GetRequiredService<IBlobReader>().ReadAsync(new BlobCreatedEvent(new Uri(outside).AbsoluteUri, "outside.json", 2, md), 100, default));
     }
 
     [Fact]
-    public void Intake_assembly_exposes_no_merge_or_approve_method()
+    public void Intake_assemblies_expose_no_merge_or_approve_method()
     {
-        var methods = typeof(IntakeService).Assembly.GetTypes()
+        var methods = new[] { typeof(IntakePipeline).Assembly, typeof(IFindingParser).Assembly, typeof(SecAgent.Intake.Azure.AzureBlobRawFindingStore).Assembly }
+            .SelectMany(a => a.GetTypes())
             .SelectMany(t => t.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly))
             .Where(m => m.Name.Contains("merge", StringComparison.OrdinalIgnoreCase) || m.Name.Contains("approve", StringComparison.OrdinalIgnoreCase)).ToList();
         Assert.Empty(methods);

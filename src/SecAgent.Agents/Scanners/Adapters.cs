@@ -5,14 +5,10 @@ using SecAgent.Core;
 
 namespace SecAgent.Agents.Scanners;
 
-public static class Common
+static class Common
 {
-    public static string Sev(string? s) => (s ?? "").ToLowerInvariant() switch
-    {
-        "critical" => "critical", "high" => "high", "error" => "high", "medium" => "medium", "moderate" => "medium", "warning" => "medium",
-        "low" => "low", "note" => "low", "info" => "info", "negligible" => "info", _ => "medium",
-    };
-    public static string Rel(string p) => p.Replace('\\', '/').TrimStart('.', '/');
+    public static string Sev(string? s) => FindingNormalisation.Severity(s);
+    public static string Rel(string p) => FindingNormalisation.RepoRelativePath(p);
     public static string TempFile(string ext) => Path.Combine(Path.GetTempPath(), "secagent-" + Guid.NewGuid().ToString("N") + ext);
 }
 
