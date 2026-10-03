@@ -1,10 +1,6 @@
-using System.ClientModel;
 using System.Diagnostics;
-using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.Agents.AI;
-using Microsoft.Extensions.AI;
-using OpenAI;
+using SecAgent.Connectors;
 using SecAgent.Core;
 
 namespace SecAgent.Agents.Llm;
@@ -30,57 +26,31 @@ public sealed class OverBudgetPackException(string m) : Exception(m);
 
 /// <summary>Thin model gateway (stands in for the APIM AI gateway, FR-40): applies the routing policy from gateway/models.yaml,
 /// logs a RoutingDecision per call, fails over within a tier, enforces run budgets and the kill switch, validates JSON output.
-/// Calls are made through Microsoft Agent Framework ChatClientAgent over the OpenAI-compatible endpoint.</summary>
+/// The call itself goes through the tenant's model provider connector (<see cref="IModelProviderClient"/>: Ollama / OpenAI / Azure OpenAI
+/// via a Microsoft Agent Framework ChatClientAgent, or the in-memory fake); the gateway never sees an API key.</summary>
 public sealed class ModelGateway
 {
-    readonly ConfigSnapshot _cfg; readonly SqlStore _store; readonly KillSwitch _kill; readonly SchemaValidator _validator;
+    readonly ConfigSnapshot _cfg; readonly SqlStore _store; readonly KillSwitch _kill; readonly SchemaValidator _validator; readonly PipelineConnectors _connectors;
     readonly SemaphoreSlim _gate;
-    readonly Dictionary<string, IChatClient> _clients = new();
     readonly Dictionary<string, int> _failures = new();
-    readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(5) };
-    (DateTime At, HashSet<string> Models) _health = (DateTime.MinValue, []);
 
-    public ModelGateway(ConfigSnapshot cfg, SqlStore store, KillSwitch kill, SchemaValidator validator)
+    public ModelGateway(ConfigSnapshot cfg, SqlStore store, KillSwitch kill, SchemaValidator validator, PipelineConnectors connectors)
     {
-        _cfg = cfg; _store = store; _kill = kill; _validator = validator;
+        _cfg = cfg; _store = store; _kill = kill; _validator = validator; _connectors = connectors;
         _gate = new SemaphoreSlim(Math.Max(1, cfg.Gateway.MaxConcurrentCalls));
     }
 
-    IChatClient Client(DeploymentConfig d)
-    {
-        lock (_clients)
-        {
-            if (_clients.TryGetValue(d.Id, out var c)) return c;
-            var key = Environment.GetEnvironmentVariable(_cfg.Gateway.ApiKeyEnv);
-            if (string.IsNullOrEmpty(key))
-            {
-                if (_cfg.Gateway.Provider is "openai" or "azureopenai")
-                    throw new ModelUnavailableException($"Environment variable {_cfg.Gateway.ApiKeyEnv} is not set (the API key is read only from the environment)");
-                key = "ollama";   // Ollama ignores the key
-            }
-            var oc = new OpenAIClient(new ApiKeyCredential(key), new OpenAIClientOptions
-            {
-                Endpoint = new Uri(_cfg.Gateway.Endpoint), NetworkTimeout = TimeSpan.FromSeconds(_cfg.Gateway.RequestTimeoutSeconds),
-            });
-            c = oc.GetChatClient(d.Model).AsIChatClient()
-                .AsBuilder().UseOpenTelemetry(sourceName: "SecAgent.GenAI", configure: o => o.EnableSensitiveData = false).Build();
-            return _clients[d.Id] = c;
-        }
-    }
+    /// <summary>The model provider of the repository's tenant (multi-tenant: no repository = no tenant = refused, never a fallback).</summary>
+    IModelProviderClient ModelClient(CallSpec spec) => _connectors.Models.ForTenant(_connectors.Tenants.ForRepository(spec.Repo ?? ""));
 
-    async Task<HashSet<string>> AvailableModelsAsync(CancellationToken ct)
+    async Task<HashSet<string>> AvailableModelsAsync(CallSpec spec, CancellationToken ct)
     {
-        if (string.IsNullOrEmpty(_cfg.Gateway.HealthUrl))   // hosted provider: no model list probe; the circuit breaker handles failures
-            return _cfg.Gateway.Tiers.Values.SelectMany(t => t).Select(d => d.Model).ToHashSet();
-        if (DateTime.UtcNow - _health.At < TimeSpan.FromSeconds(30)) return _health.Models;
-        try
-        {
-            var j = await _http.GetFromJsonAsync<JsonElement>(_cfg.Gateway.HealthUrl, ct);
-            var set = j.GetProperty("models").EnumerateArray().Select(m => m.GetProperty("name").GetString()!).ToHashSet();
-            _health = (DateTime.UtcNow, set);
-        }
-        catch { _health = (DateTime.UtcNow, []); }
-        return _health.Models;
+        IReadOnlyCollection<string>? models;
+        try { models = await ModelClient(spec).ListAvailableModelsAsync(ct); }
+        catch (ConnectorException e) when (e is not ConnectorConfigurationException and not ConnectorNotConfiguredException and not UnknownTenantException) { models = []; }
+        catch (ConnectorException e) { throw new ModelUnavailableException(e.Message); }
+        // Hosted provider (no model list probe): every configured deployment is a candidate; the circuit breaker handles failures.
+        return models?.ToHashSet() ?? _cfg.Gateway.Tiers.Values.SelectMany(t => t).Select(d => d.Model).ToHashSet();
     }
 
     public async Task<(RoutingDecision Decision, List<DeploymentConfig> Candidates)> RouteAsync(ContextPack pack, CallSpec spec, RunBudget budget, CancellationToken ct)
@@ -108,7 +78,7 @@ public sealed class ModelGateway
             tier = g.TierOrder[0]; reasons.Add($"low budget ({budget.Remaining} tokens left): standard task routed to {tier}");
             if (est > budget.Remaining) throw new BudgetExceededException($"Run token budget exhausted ({budget.Remaining} left, call needs ~{est}).");
         }
-        var available = await AvailableModelsAsync(ct);
+        var available = await AvailableModelsAsync(spec, ct);
         var candidates = g.Tiers[tier]
             .Where(d => available.Contains(d.Model) || available.Contains(d.Model + ":latest"))
             .Where(d => d.ContextWindow >= est)
@@ -167,7 +137,11 @@ public sealed class ModelGateway
                 }
                 catch (SchemaInvalidException) { throw; }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception e) when (e is HttpRequestException or ClientResultException or TimeoutException or IOException)
+                catch (Exception e) when (e is ConnectorConfigurationException or ConnectorNotConfiguredException or UnknownTenantException)
+                {
+                    throw new ModelUnavailableException(e.Message);   // e.g. API key not set: no failover can fix configuration
+                }
+                catch (Exception e) when (e is ConnectorException or HttpRequestException or TimeoutException or IOException)
                 {
                     last = e; _failures[d.Id] = _failures.GetValueOrDefault(d.Id) + 1;
                 }
@@ -212,25 +186,20 @@ public sealed class ModelGateway
     async Task<JsonElement> InvokeWithSchemaRetriesAsync(DeploymentConfig d, ContextPack pack, CallSpec spec, RoutingDecision rd, CancellationToken ct)
     {
         var schema = _validator.SchemaElement(spec.SchemaName);
-        // Microsoft Agent Framework agent: one fresh session per call (no ever-growing chat history, section 6.1).
-        AIAgent agent = new ChatClientAgent(Client(d), new ChatClientAgentOptions
-        {
-            Name = pack.AgentId,
-            ChatOptions = new ChatOptions
-            {
-                Temperature = _cfg.Gateway.SendTemperature ? 0 : null, Seed = _cfg.Gateway.SendSeed ? 42 : null, MaxOutputTokens = _cfg.Gateway.OutputReserveTokens,
-                ResponseFormat = ChatResponseFormat.ForJsonSchema(schema, spec.SchemaName.Replace("-", "_"), "SecAgent " + spec.SchemaName),
-            },
-        });
+        var provider = ModelClient(spec);
+        // One fresh request per attempt (no ever-growing chat history, section 6.1); structured output by JSON schema.
+        var request = new ModelRequest(d.Model, [new(ModelRole.System, pack.SystemText), new(ModelRole.User, pack.UserText)],
+            new StructuredOutput(spec.SchemaName.Replace("-", "_"), "SecAgent " + spec.SchemaName, schema),
+            MaxOutputTokens: _cfg.Gateway.OutputReserveTokens, Temperature: _cfg.Gateway.SendTemperature ? 0 : null, Seed: _cfg.Gateway.SendSeed ? 42 : null,
+            AgentName: pack.AgentId);
         var max = _cfg.Policies.Retries.MaxSchemaRetries;
         string? lastError = null;
         for (int attempt = 0; attempt <= max; attempt++)
         {
             rd.SchemaAttempts = attempt + 1;
-            List<ChatMessage> messages = [new(ChatRole.System, pack.SystemText), new(ChatRole.User, pack.UserText)];
-            var resp = await agent.RunAsync(messages, cancellationToken: ct);
-            rd.TokensIn += (int)(resp.Usage?.InputTokenCount ?? 0);
-            rd.TokensOut += (int)(resp.Usage?.OutputTokenCount ?? 0);
+            var resp = await provider.CompleteAsync(request, ct);
+            rd.TokensIn += (int)resp.Usage.InputTokens;
+            rd.TokensOut += (int)resp.Usage.OutputTokens;
             rd.GatewayRequestId = resp.ResponseId ?? rd.GatewayRequestId;
             try
             {

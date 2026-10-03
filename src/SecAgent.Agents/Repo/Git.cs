@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using SecAgent.Connectors;
 using SecAgent.Core;
 
 namespace SecAgent.Agents.Repo;
@@ -10,10 +11,11 @@ public sealed record PrInfo(string Repo, int Number, string Title, string HeadRe
     public bool IsFork => HeadRepo != null && !string.Equals(HeadRepo, Repo, StringComparison.OrdinalIgnoreCase);
 }
 
-/// <summary>Local git workspace for a run: a clone at the PR head, a base worktree, and one worktree per fix branch.</summary>
+/// <summary>Local git workspace for a run: a clone at the PR head, a base worktree, and one worktree per fix branch.
+/// Only local git work happens here; every call to GitHub (read the PR, push, open PRs) goes through the source control connector.</summary>
 public sealed class GitWorkspace(string workRoot, Func<string, string>? cloneUrl = null)
 {
-    // Injectable so tests can point at a local bare repository instead of github.com.
+    // The clone URL comes from the source control connector (IRepositoryLocator); tests point it at a local bare repository.
     readonly Func<string, string> _cloneUrl = cloneUrl ?? (repo => $"https://github.com/{repo}.git");
 
     const string AgentName = "Security Triage Agent (POC)";
@@ -26,16 +28,9 @@ public sealed class GitWorkspace(string workRoot, Func<string, string>? cloneUrl
         return r.StdOut;
     }
 
-    public static async Task<PrInfo> GetPrAsync(string repo, int pr, CancellationToken ct)
-    {
-        var r = await Proc.RunAsync(Proc.Which("gh"), ["api", $"repos/{repo}/pulls/{pr}"], ct: ct);
-        if (r.ExitCode != 0) throw new InvalidOperationException("gh api pulls failed: " + r.StdErr);
-        var j = JsonNode.Parse(r.StdOut)!;
-        return new PrInfo(repo, pr, j["title"]!.GetValue<string>(), j["head"]!["ref"]!.GetValue<string>(), j["base"]!["ref"]!.GetValue<string>(),
-            j["head"]!["sha"]!.GetValue<string>(), j["base"]!["sha"]!.GetValue<string>(), j["changed_files"]!.GetValue<int>(),
-            j["additions"]!.GetValue<int>(), j["deletions"]!.GetValue<int>(), j["html_url"]!.GetValue<string>(),
-            j["head"]?["repo"]?["full_name"]?.GetValue<string>());
-    }
+    /// <summary>Maps the source control connector's PR to the pipeline's view of it.</summary>
+    public static PrInfo ToPrInfo(PullRequestInfo p) =>
+        new(p.Repo, p.Number, p.Title, p.HeadRef, p.BaseRef, p.HeadSha, p.BaseSha, p.FilesChanged, p.Additions, p.Deletions, p.Url, p.HeadRepo);
 
     public string RunDir(Guid runId) => Path.Combine(workRoot, runId.ToString("N")[..12]);
     public string HeadDir(Guid runId) => Path.Combine(RunDir(runId), "head");
@@ -100,58 +95,6 @@ public sealed class GitWorkspace(string workRoot, Func<string, string>? cloneUrl
 
     public static Task<string> DiffAsync(string wt, string fromSha, CancellationToken ct, params string[] paths) =>
         Git(wt, ct, ["diff", "--unified=1", fromSha, "HEAD", "--", .. paths]);
-
-    public static async Task<bool> RemoteBranchExistsAsync(string wt, string branch, CancellationToken ct) =>
-        (await Git(wt, ct, "ls-remote", "--heads", "origin", branch)).Trim().Length > 0;
-
-    /// <summary>Plain push of a new branch. Never force-pushes.</summary>
-    public static Task<string> PushAsync(string wt, string branch, CancellationToken ct, string? remoteBranch = null) =>
-        Git(wt, ct, "push", "--quiet", "origin", $"HEAD:refs/heads/{remoteBranch ?? branch}");
-}
-
-/// <summary>GitHub operations available to agents: find and create PRs. There is intentionally no merge, approve or
-/// branch-protection method in this class (FR-17); merges are a human action on GitHub.</summary>
-public static class GitHubPrs
-{
-    /// <param name="State">OPEN, CLOSED or MERGED (gh CLI values).</param>
-    /// <param name="BaseRef">Branch the PR targets (for fix PRs: the scanned PR's head branch).</param>
-    public sealed record Pr(int Number, string Url, string State, string Title, string BaseRef = "");
-
-    const string PrFields = "number,url,state,title,baseRefName";
-    static Pr Parse(JsonNode j) => new(j["number"]!.GetValue<int>(), j["url"]!.GetValue<string>(), j["state"]!.GetValue<string>(), j["title"]!.GetValue<string>(),
-        j["baseRefName"]?.GetValue<string>() ?? "");
-
-    public static async Task<Pr?> FindByHeadAsync(string repo, string head, CancellationToken ct)
-    {
-        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "list", "-R", repo, "--head", head, "--state", "all", "--json", PrFields], ct: ct);
-        if (r.ExitCode != 0) throw new InvalidOperationException("gh pr list failed: " + r.StdErr);
-        var arr = JsonNode.Parse(r.StdOut)!.AsArray();
-        var j = arr.FirstOrDefault(x => x!["state"]!.GetValue<string>() == "OPEN") ?? arr.FirstOrDefault();
-        return j == null ? null : Parse(j);
-    }
-
-    /// <summary>Current state of one PR (used to revalidate ledger entries before reusing them). Null when it no longer exists.</summary>
-    public static async Task<Pr?> GetAsync(string repo, int number, CancellationToken ct)
-    {
-        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "view", number.ToString(), "-R", repo, "--json", PrFields], ct: ct);
-        if (r.ExitCode != 0)
-        {
-            if (r.StdErr.Contains("Could not resolve", StringComparison.OrdinalIgnoreCase) || r.StdErr.Contains("not found", StringComparison.OrdinalIgnoreCase)) return null;
-            throw new InvalidOperationException("gh pr view failed: " + r.StdErr);
-        }
-        return Parse(JsonNode.Parse(r.StdOut)!);
-    }
-
-    public static async Task<Pr> CreateAsync(string repo, string baseBranch, string head, string title, string body, CancellationToken ct)
-    {
-        var bodyFile = Path.GetTempFileName();
-        await File.WriteAllTextAsync(bodyFile, body, ct);
-        var r = await Proc.RunAsync(Proc.Which("gh"), ["pr", "create", "-R", repo, "--base", baseBranch, "--head", head, "--title", title, "--body-file", bodyFile], ct: ct);
-        File.Delete(bodyFile);
-        if (r.ExitCode != 0) throw new InvalidOperationException("gh pr create failed: " + r.StdErr);
-        var url = r.StdOut.Trim().Split('\n').Last().Trim();
-        return new Pr(int.Parse(url.Split('/').Last()), url, "OPEN", title, baseBranch);
-    }
 }
 
 /// <summary>Decides whether an existing fix PR (from the idempotency ledger or found by branch) may be reused for the current
@@ -160,12 +103,12 @@ public static class PrReuse
 {
     public sealed record Decision(bool Reuse, string Reason);
 
-    public static Decision Decide(GitHubPrs.Pr? pr, string repo, string targetRef)
+    public static Decision Decide(PullRequestSummary? pr, string repo, string targetRef)
     {
         if (pr == null) return new(false, "PR no longer exists");
         if (!FixKeys.PrUrlInRepo(pr.Url, repo)) return new(false, $"PR #{pr.Number} is in another repository");
-        if (pr.State == "MERGED") return new(false, $"PR #{pr.Number} was merged");
-        if (pr.State != "OPEN") return new(false, $"PR #{pr.Number} is {pr.State.ToLowerInvariant()}");
+        if (pr.State == PullRequestState.Merged) return new(false, $"PR #{pr.Number} was merged");
+        if (pr.State != PullRequestState.Open) return new(false, $"PR #{pr.Number} is {pr.State.ToString().ToLowerInvariant()}");
         if (!string.Equals(pr.BaseRef, targetRef, StringComparison.Ordinal)) return new(false, $"PR #{pr.Number} targets {pr.BaseRef}, not the current PR head {targetRef}");
         return new(true, $"PR #{pr.Number} is open against {targetRef}");
     }

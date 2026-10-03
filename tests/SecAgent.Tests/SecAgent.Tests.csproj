@@ -13,6 +13,15 @@
     <ProjectReference Include="../../src/SecAgent.Agents/SecAgent.Agents.csproj" />
     <ProjectReference Include="../../src/SecAgent.Intake/SecAgent.Intake.csproj" />
     <ProjectReference Include="../../src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />

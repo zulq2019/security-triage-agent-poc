@@ -11,6 +11,9 @@ using SecAgent.Abstractions.Intake;
 using SecAgent.Intake;
 using SecAgent.Intake.Configuration;
 using SecAgent.Intake.Http;
+using SecAgent.Connectors;
+using SecAgent.Connectors.Configuration;
+using SecAgent.Connectors.Health;
 
 // ---------------------------------------------------------------------------------------------------------------
 // secagent serve [--port 8795]                         dashboard (live run via SSE) + API
@@ -56,7 +59,8 @@ if (cmd == "seed-usage")
 if (cmd == "run")
 {
     using var tp = Otel.Configure(Sdk.CreateTracerProviderBuilder(), dataRoot).Build();
-    var s = AgentServices.Create(repoRoot, dataRoot, sql);
+    await using var sp = DashboardComposition.BuildCliServices(repoRoot, dataRoot, sql);
+    var s = sp.GetRequiredService<AgentServices>();
     var repo = Arg("--repo") ?? "zulq2019/sec-agent-sample-app";
     var pr = int.Parse(Arg("--pr") ?? "1");
     s.Bus.OnEvent += (_, json) => ConsoleFeed.Print(json);
@@ -73,7 +77,8 @@ if (cmd == "export")
 {
     // secagent export [--run <id>] [--out replay-static/run.json] [--usage-sample <days>]: recorded run → static JSON for the no-backend replay UI.
     // --usage-sample adds a SYNTHETIC usage sample (SyntheticUsage, seed 42, every row synthetic = true) ending on the run's IST day, for the replay Usage tab.
-    var s = AgentServices.Create(repoRoot, dataRoot, sql);
+    await using var sp = DashboardComposition.BuildCliServices(repoRoot, dataRoot, sql);
+    var s = sp.GetRequiredService<AgentServices>();
     var id = Arg("--run") is { } rid ? Guid.Parse(rid) : s.Store.Runs(50).First(r => r.Status is "awaiting_human_review" or "review_recorded").RunId;
     var run = s.Store.GetRun(id) ?? throw new InvalidOperationException($"run {id} not found");
     var events = s.Store.Events(id).Select(e => JsonDocument.Parse(e).RootElement.Clone()).ToList();
@@ -116,7 +121,7 @@ builder.Services.AddOpenTelemetry()
 // canonical findings and start a PR run like POST /api/runs.
 builder.Configuration.AddSecAgentConfiguration(repoRoot, dataRoot);
 builder.Logging.AddFilter("SecAgent.Intake", LogLevel.Information);
-builder.Services.AddSecAgentPipeline(repoRoot, dataRoot, sql);
+builder.Services.AddSecAgentPipeline(builder.Configuration, repoRoot, dataRoot, sql);
 builder.Services.AddSecAgentIntake(builder.Configuration);
 var app = builder.Build();
 var svc = app.Services.GetRequiredService<AgentServices>();
@@ -171,6 +176,27 @@ app.MapPost("/api/controls/killswitch", (Kill k) =>
     foreach (var st in RunRegistry.Active) st.Feed.Publish("guards", new { kill = svc.Kill.IsOn });
     return Results.Ok(new { kill_switch = svc.Kill.IsOn });
 });
+// ------------------------------------------------ connectors (Connections page data; SDD 9.7 / 9.8) ------------------------------------------------
+// Lists the registered plug-ins (capability descriptors) and, per tenant, which one is configured for each kind. Secret REFERENCES only.
+var connectorJson = new JsonSerializerOptions(Schema.Json) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
+string TenantOf(HttpRequest q)
+{
+    var o = app.Services.GetRequiredService<IOptionsMonitor<ConnectorOptions>>().CurrentValue;
+    return q.Query["tenant"].FirstOrDefault() ?? (o.DeploymentModel == DeploymentModel.SingleTenant ? o.DefaultTenant : o.Tenants.Keys.FirstOrDefault() ?? o.DefaultTenant);
+}
+app.MapGet("/api/connectors", async (HttpRequest q, CancellationToken ct) =>
+{
+    var o = app.Services.GetRequiredService<IOptionsMonitor<ConnectorOptions>>().CurrentValue;
+    var tenant = TenantOf(q);
+    var status = await app.Services.GetRequiredService<IConnectorHealthService>().GetStatusAsync(tenant, probe: false, ct);
+    return Results.Json(new
+    {
+        deployment_model = o.DeploymentModel, tenant, tenants = o.DeploymentModel == DeploymentModel.SingleTenant ? [o.DefaultTenant] : o.Tenants.Keys.ToList(),
+        catalog = app.Services.GetRequiredService<IConnectorCatalog>().Descriptors, connections = status,
+    }, connectorJson);
+});
+app.MapGet("/api/connectors/health", async (HttpRequest q, CancellationToken ct) =>
+    Results.Json(await app.Services.GetRequiredService<IConnectorHealthService>().GetStatusAsync(TenantOf(q), probe: true, ct), connectorJson));
 // ------------------------------------------------ usage (model calls, tokens, cost) ------------------------------------------------
 app.MapGet("/api/usage/summary", (HttpRequest q) =>
 {

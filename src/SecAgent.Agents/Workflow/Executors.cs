@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using SecAgent.Abstractions;
+using SecAgent.Connectors;
 using SecAgent.Agents.Llm;
 using SecAgent.Agents.Repo;
 using SecAgent.Agents.Scanners;
@@ -175,13 +176,13 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         }
         var e = Feed.Entry("orch", $"opening fix PR for {FixerName(m.FixerId)} · {m.Branch}");
         var taken = S.Store.TryTake(key, "pr", TimeSpan.FromMinutes(30));
-        GitHubPrs.Pr? pr = null;
+        PullRequestSummary? pr = null;
         if (taken is { Status: "completed" })
         {
             // Ledger hit: only reuse the recorded PR if it is still open in this repo and targets the current PR head.
             var n = FixKeys.PrNumber(taken.ResultRef);
             var cur = n is int num && FixKeys.PrUrlInRepo(taken.ResultRef, R.Pr.Repo)
-                ? await S.Tools.RunAsync("orchestrator", "github.get_pr", $"#{num} (ledger hit {key[..20]}…) revalidate", Feed, e, () => GitHubPrs.GetAsync(R.Pr.Repo, num, Ct), Ct)
+                ? await S.Tools.RunAsync("orchestrator", "github.get_pr", $"#{num} (ledger hit {key[..20]}…) revalidate", Feed, e, () => GetSummaryAsync(num), Ct)
                 : null;
             var d = PrReuse.Decide(cur, R.Pr.Repo, R.Pr.HeadRef);
             if (d.Reuse) pr = cur;
@@ -197,7 +198,7 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
             Feed.Update(e, "orch", $"PR creation for {m.Branch} already in progress elsewhere (ledger) · skipped", "warn");
             g.Outcome = "pr_reused"; return;
         }
-        pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => GitHubPrs.FindByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
+        pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => Scm.FindPullRequestByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
         var reused = pr != null && PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef).Reuse;   // an open PR against another base is not reused
         var branch = m.Branch;
         try
@@ -216,12 +217,13 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
                 try
                 {
                     // A remote branch without an open PR (e.g. an earlier crashed run) is never overwritten: push under a run-suffixed name instead.
-                    if (await GitWorkspace.RemoteBranchExistsAsync(m.Worktree, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
-                    await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct, branch), Ct);
+                    if (await Scm.BranchExistsAsync(R.Pr.Repo, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
+                    await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e,
+                        () => Scm.PublishBranchAsync(new BranchPublishRequest(R.Pr.Repo, m.Worktree, branch), Ct), Ct);
                     var title = PrTitle(m.FixerId, findings, fix);
                     var body = PrBody(m, g, findings, fix);
                     pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={branch}", Feed, e,
-                        () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false), Ct), Ct);
+                        () => Scm.CreatePullRequestAsync(R.Pr.Repo, new NewPullRequest(R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false)), Ct), Ct);
                 }
                 finally { R.Deadline.ExitPush(); }
             }
@@ -700,7 +702,7 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
     async Task<PrReuse.Decision> RevalidateAsync(SqlStore.LedgerEntry ledger)
     {
         if (FixKeys.PrNumber(ledger.ResultRef) is not int n || !FixKeys.PrUrlInRepo(ledger.ResultRef, R.Pr.Repo)) return new(false, "ledger entry has no PR in this repository");
-        var pr = await S.Tools.RunAsync("router", "github.get_pr", $"#{n} revalidate (state, base)", null, null, () => GitHubPrs.GetAsync(R.Pr.Repo, n, Ct), Ct);
+        var pr = await S.Tools.RunAsync("router", "github.get_pr", $"#{n} revalidate (state, base)", null, null, () => GetSummaryAsync(n), Ct);
         return PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef);
     }
 }
