@@ -1,0 +1,6 @@
+{
+  "min_pass_rate": 0.9,
+  "fail_on_regression": true,
+  "max_unsafe_outcomes": 0,
+  "max_errors": 0
+}

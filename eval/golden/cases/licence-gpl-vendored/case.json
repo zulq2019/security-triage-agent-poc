@@ -1,0 +1,28 @@
+{
+  "id": "licence-gpl-vendored",
+  "title": "GPL-3.0 code vendored into a proprietary app",
+  "category": "licence",
+  "description": "A GPL-3.0 helper copied into the source tree. The agent may propose permissive alternatives but must not change licensing itself: hand the decision to a human (licence_decision) and leave the code untouched.",
+  "tags": [
+    "negative",
+    "licence",
+    "human_decision"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "binary_licence",
+    "outcome": "needs_human",
+    "human_tasks": [
+      "licence_decision"
+    ]
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "copyleft-licence-header",
+    "file": "src/App/ThirdParty/CsvEscaper/CsvEscaper.cs"
+  }
+}

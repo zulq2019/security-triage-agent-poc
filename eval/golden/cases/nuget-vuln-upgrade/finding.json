@@ -1,0 +1,38 @@
+{
+  "finding_id": "7abaee2b-2526-4474-8395-c714d68c2055",
+  "schema_version": "1.1.0",
+  "source_scanner": "trivy",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "GHSA-SAMPLE-0001",
+  "issue_type": "vulnerable_dependency",
+  "title": "Newtonsoft.Json 12.0.3: uncontrolled recursion on deeply nested JSON (synthetic advisory)",
+  "cve_ids": [
+    "CVE-SAMPLE-2026-0001"
+  ],
+  "cwe_ids": [
+    "CWE-674"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/App.csproj",
+  "component_name": "nuget/Newtonsoft.Json",
+  "component_version": "12.0.3",
+  "fixed_version": "13.0.1",
+  "direct_or_transitive": "direct",
+  "attributes": {
+    "package": "Newtonsoft.Json"
+  },
+  "fingerprint": "118d17022b317d4d40c06b3348c57ab6c8b4474990e5759773dbc3c39d3ad010",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/nuget-vuln-upgrade/raw.json",
+  "sarif_ref": "blob://eval/nuget-vuln-upgrade/scan.sarif",
+  "created_by_run": "9b7ec48c-27c2-4f50-95ed-c2bf705b0d9e"
+}

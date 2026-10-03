@@ -1,0 +1,44 @@
+{
+  "id": "xss-controller-content",
+  "title": "Reflected XSS: query value concatenated into an HTML response",
+  "category": "xss",
+  "description": "A controller builds HTML by concatenating the name query parameter. Expected: HTML-encode the value; a test proves a script tag comes back encoded.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Controllers/GreetingController.cs",
+      "regex": "(HtmlEncode|HtmlEncoder\\.Default\\.Encode)\\("
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Controllers/GreetingController.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "html-response-concatenation",
+    "file": "src/App/Controllers/GreetingController.cs"
+  }
+}

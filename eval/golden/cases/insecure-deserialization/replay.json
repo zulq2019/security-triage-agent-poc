@@ -1,0 +1,24 @@
+{
+  "case_id": "insecure-deserialization",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "b3f8f9666855a91eabe6c66770f70708f5b16d5ba09a461cee0b01323668a306",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Untrusted JSON deserialised with TypeNameHandling.All lets the payload pick the type (CWE-502).",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "dbbde04eea395ede5466a419b60b02588f45df0ed4e1238125561b436be1d129",
+      "response": {
+        "method_code": "public OrderMessage? Load(string json)\n{\n    var settings = new JsonSerializerSettings { TypeNameHandling = TypeNameHandling.None };\n    return JsonConvert.DeserializeObject<OrderMessage>(json, settings);\n}\n",
+        "test_code": "[Fact]\npublic void Load_ignores_type_names_in_the_payload()\n{\n    var json = \"{\\\"$type\\\":\\\"System.IO.FileInfo, System.IO.FileSystem\\\",\\\"Id\\\":9,\\\"Customer\\\":\\\"mallory\\\"}\";\n    var m = new OrderMessageReader().Load(json);\n    Assert.IsType<OrderMessage>(m);\n    Assert.Equal(9, m!.Id);\n}\n",
+        "explanation": "Disable type-name handling so the payload cannot choose the type to instantiate."
+      }
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "xss-razor-html-raw",
+  "title": "XSS in a Razor view: user bio rendered with Html.Raw",
+  "category": "xss",
+  "description": "A user-controlled bio is written with @Html.Raw, bypassing Razor encoding. Expected: render @Model.Bio (encoded). Known gap: the unsafe-code fixer edits C# methods only, so today it cannot edit .cshtml and hands the finding to a human; this case is expected to fail until a Razor-aware fixer exists.",
+  "tags": [
+    "positive",
+    "sast",
+    "known_gap"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "pattern_absent",
+      "file": "src/App/Views/Profile/Show.cshtml",
+      "regex": "Html\\.Raw\\("
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Views/Profile/Show.cshtml",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "razor-html-raw",
+    "file": "src/App/Views/Profile/Show.cshtml"
+  },
+  "notes": "Known gap, deliberately kept: shows a real limitation instead of a passing number. Production UnsafeCodeFixer has the same limitation (method-level edits only)."
+}

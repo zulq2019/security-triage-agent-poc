@@ -1,0 +1,24 @@
+{
+  "case_id": "path-traversal",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "bb96555e3ff0d9571034382c6e07f32bff5f41effe47042e133fc7378658a00c",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Caller-controlled file name joined to a base folder and read without canonicalisation: path traversal (CWE-22).",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "4166cbc8831ac18fad5f765c2831518576f93c9c16df05f8978d34e439aed9ad",
+      "response": {
+        "method_code": "public string Read(string name)\n{\n    var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_root)) + Path.DirectorySeparatorChar;\n    var full = Path.GetFullPath(Path.Combine(root, name));\n    if (!full.StartsWith(root, StringComparison.Ordinal))\n        throw new UnauthorizedAccessException(\"report name resolves outside the report folder\");\n    return File.ReadAllText(full);\n}\n",
+        "test_code": "[Fact]\npublic void Read_refuses_a_name_that_escapes_the_folder()\n{\n    var store = new ReportStore(ReportStoreTests.NewRoot());\n    Assert.Throws<UnauthorizedAccessException>(() => store.Read(\"../../etc/passwd\"));\n}\n",
+        "explanation": "Canonicalise the combined path and reject names that resolve outside the report folder."
+      }
+    }
+  }
+}

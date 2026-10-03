@@ -1,0 +1,24 @@
+{
+  "case_id": "ssrf-user-url",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "5d2de2f97e7e3ebeb7dc8bc535db9cfad8011e67821a4fe2d61475231e6eac93",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Caller-supplied URL fetched server-side without validation: SSRF (CWE-918), e.g. cloud metadata endpoints.",
+        "confidence": 0.88
+      }
+    },
+    "fix": {
+      "prompt_sha256": "d8bb821070e0b0a7c977f5fa82085586097d4cca02fe82f6a7a9839f6dc2def7",
+      "response": {
+        "method_code": "public async Task<byte[]> FetchAsync(string url)\n{\n    string[] allowedHosts = [\"avatars.example.com\"];\n    if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !allowedHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase))\n        throw new ArgumentException(\"avatar URL must be https on an allowed host\", nameof(url));\n    return await _http.GetByteArrayAsync(uri);\n}\n",
+        "test_code": "[Fact]\npublic async Task FetchAsync_refuses_internal_addresses_without_a_request()\n{\n    var handler = new FakeHandler();\n    var fetcher = new AvatarFetcher(new HttpClient(handler));\n    await Assert.ThrowsAsync<ArgumentException>(() => fetcher.FetchAsync(\"http://169.254.169.254/latest/meta-data/\"));\n    Assert.Empty(handler.Requests);\n}\n",
+        "explanation": "Allow only https URLs on the avatar host; reject everything else before sending a request."
+      }
+    }
+  }
+}
