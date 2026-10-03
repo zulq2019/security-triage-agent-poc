@@ -33,3 +33,12 @@ Times are IST (UTC+5:30).
   - Example workflows in `.github/workflows/examples/` (inactive): PR push of rapid JSON, nightly SARIF on main (backlog mode), Blob upload alternative. Docs: `docs/intake.md`.
   - Synthetic fixtures only. 137/137 tests pass (76 existing + 61 new, including real-HTTP end-to-end tests that also run the example workflow's sign-and-POST bash).
 - 2026-10-03 ~21:30: **Intake design pass (SOLID / DI)** on `feature/sarif-intake`: new `SecAgent.Abstractions` (ports, Core-only), intake no longer references the pipeline; single composition root `AddSecAgentIntake(IServiceCollection, IConfiguration)` with Options pattern + ValidateOnStart, injected `TimeProvider` / `IIntakeSecretProvider`; parser Strategy + registry (`AddIntakeParser<T>`); accept pipeline as a chain of `IIntakeStep`s (`AddIntakeStep<T>`); keyed adapters selected by `Intake:Adapters:*` with new `SecAgent.Intake.Azure` (Blob, Service Bus); dispatcher and drop watcher as hosted services; static schema cache replaced by injected `JsonSchemaCache`. Behaviour unchanged (same endpoints, status codes, storage layout). 153/153 tests pass (76 original + 77 intake). Dashboard smoke test: signed nightly-workflow POST → 202, unsigned → 401.
+- 2026-10-03 ~21:30: **Golden test set + evaluation harness** (branch `feature/golden-eval`, stacked on `feature/sarif-intake`):
+  - 21 synthetic cases in `eval/golden/cases`: 12 fix and 9 refuse/escalate.
+  - New `src/SecAgent.Eval` (`secagent-eval run|list|stamp`). Replay is the default; live, record and stamp modes are also available.
+  - Pluggable `IOutcomeChecker` per check type, gates in `gates.json` and a committed `baseline.json`. Reports are written as JSON and Markdown.
+  - New CI workflow `.github/workflows/eval.yml`.
+  - Extracted the pure `TriagePolicy`, `TriageSnippets`, `FixEdits` and `ContextAssembler` so the pipeline and the harness share them. Behaviour is unchanged.
+  - Replay with authored reference answers: 20/21 passed. The one failure is the known Razor gap. 0 unsafe outcomes, gate passed.
+  - Live mode was tried only as smoke runs on local Ollama; these are not quality numbers (see docs/evaluation.md).
+  - Tests: 157/157 (non-golden) + 80/80 eval.

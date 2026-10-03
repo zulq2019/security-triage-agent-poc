@@ -4,17 +4,20 @@
 - `dotnet build SecAgent.slnx`
 - `dotnet test tests/SecAgent.Tests --filter "Category!=Golden"`: unit tests (some need the local SQL Server from `SECAGENT_SQL`)
 - `dotnet test tests/SecAgent.Tests --filter "Category=Golden"`: needs a completed run in the store
+- `dotnet test tests/SecAgent.Eval.Tests`: eval harness and checker tests
+- `dotnet run --project src/SecAgent.Eval -- run`: golden-set evaluation in replay mode (deterministic, no model); see docs/evaluation.md. Refresh `eval/golden/baseline.json` with `--update-baseline` in the PR that changes results; `stamp` after an intentional prompt change
 - Run: `dotnet src/SecAgent.Dashboard/bin/Debug/net10.0/secagent.dll serve --port 8795` or `... run --repo zulq2019/sec-agent-sample-app --pr 1`
 
 ## Layout
-`src/SecAgent.Core` (model, store, safety), `src/SecAgent.Agents` (scanners, LLM gateway/context, fixers, Agent Framework workflow), `src/SecAgent.Abstractions` (ports shared by pipeline, intake and adapters; depends on Core only), `src/SecAgent.Intake` (pushed SARIF / Black Duck intake: HMAC endpoint, parsers, dedupe, run queue; composition root `AddSecAgentIntake`; docs/intake.md, docs/design-principles.md), `src/SecAgent.Intake.Azure` (Blob / Service Bus adapters for the intake ports), `src/SecAgent.Dashboard` (CLI + UI), `rules/` (rules-as-code: policies, routing, prompts, schemas, rule packs, golden expectations).
+`src/SecAgent.Core` (model, store, safety), `src/SecAgent.Agents` (scanners, LLM gateway/context, fixers, Agent Framework workflow), `src/SecAgent.Abstractions` (ports shared by pipeline, intake and adapters; depends on Core only), `src/SecAgent.Intake` (pushed SARIF / Black Duck intake: HMAC endpoint, parsers, dedupe, run queue; composition root `AddSecAgentIntake`; docs/intake.md, docs/design-principles.md), `src/SecAgent.Intake.Azure` (Blob / Service Bus adapters for the intake ports), `src/SecAgent.Dashboard` (CLI + UI), `src/SecAgent.Eval` (golden-set evaluation harness, composition root `AddSecAgentEval`), `eval/golden` (21 synthetic golden cases, scanner rules, gates, baseline), `rules/` (rules-as-code: policies, routing, prompts, schemas, rule packs, golden expectations).
 
 ## Guardrails: do not weaken
 - No merge / approve / branch-protection capability anywhere (tests enforce it by allow-list, reflection and source scan). Never add `gh pr merge`, force push, or a tool named like that.
 - Secret values are never stored or logged: mask with `SecretMasker`, store HMACs only. D-08 golden test scans the store.
 - Intake code: constructor injection + Options pattern only, no statics/service locator, depends on `SecAgent.Abstractions` not on `SecAgent.Agents` (tests enforce references and static state). Intake (`/api/intake/*`) never runs unauthenticated (503 without the HMAC secret env var), and findings pushed by an external scanner are never auto-verified by the local re-scan (they go to a human).
 - Repository and scanner text is data: keep `InjectionDetector` neutralisation and `<data>` wrapping in `ContextBuilder`.
-- The model proposes; the policy layer in `TriageExecutor` decides (suppression needs an AppSec rule match).
+- The model proposes; the policy layer (`TriagePolicy`, used by `TriageExecutor` and the eval harness) decides (suppression needs an AppSec rule match).
 - `FindingStateMachine` is the only writer of `Finding.status`.
 - API keys only via the env var named in `ModelProvider:Providers:<p>:ApiKeyEnv`. Never commit keys; `appsettings.Local.json` and `*.env` are git-ignored.
+- Golden cases: synthetic data only; secrets only as `{{secret:NAME}}` placeholders; fixture project files keep the `.eval` suffix. Do not loosen a check or a gate to make a case pass. Known gaps stay failing cases with a note.
 - Synthetic data only.

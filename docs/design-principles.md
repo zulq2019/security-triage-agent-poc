@@ -72,3 +72,22 @@ flowchart TB
 What stays static, and why: `ExternalFindingPolicy`, `FindingNormalisation`, `ParserUtil`, `IntakeSignature` and `BlackDuckSarifHints`
 are pure functions or constants with no state or I/O, so there is nothing to inject or swap. The existing pipeline (`AgentServices.Create`,
 `RunService.AnyActive`, `Hashing.Hmac`) was left as it was. The intake reaches it only through the ports above.
+
+## Evaluation harness (golden set)
+
+`src/SecAgent.Eval` (see [evaluation.md](evaluation.md)) follows the same rules as the intake. It uses constructor injection only, has a
+single composition root (`services.AddSecAgentEval(options)`), validates its options on first use, injects `TimeProvider`, and keeps no
+mutable static state. Reflection tests enforce the static-state rule, the absence of merge/approve methods, and that services depend on
+harness interfaces rather than classes.
+
+| Pattern / principle | Where |
+|---|---|
+| **Strategy** | `IOutcomeChecker` (one class per check type, looked up by `ICheckerRegistry`), `IEvalFixer` (one per routed fixer id, chosen by `IFixRouter` from `routing.yaml`), `IEvalModelClient` (replay / live / record / stamp), `IGateRule`, `IReportWriter`. Each is added with `AddOutcomeChecker<T>()`, `AddEvalFixer<T>()`, `AddGateRule<T>()` or `AddReportWriter<T>()`. |
+| **Keyed services by configuration** | Model clients are keyed by mode. `IEvalModelClient` resolves the key named in `EvalOptions.Mode`. |
+| **Decorator** | `RecordingModelClient` wraps the live client and saves its answers. `StampingModelClient` wraps the replay client and writes prompt hashes. |
+| **Ports & adapters** | `ICaseSource`, `ICaseWorkspaceFactory`, `IGitDiff`, `IProcessRunner`, `IBuildRunner`, `IFindingScanner`, `ICassetteStore`, `IBaselineStore`, `IPackageVersionResolver` and `ISyntheticSecretGenerator`, each with a file-system or process adapter. The regex scanner can be swapped for a gitleaks/Semgrep/Trivy adapter. |
+| **Template method** | `ExpectedValueChecker` (triage decision, fixer, outcome, severity) and `PatternChecker` (absent / present). |
+| **Memoised evidence** | `ICaseEvidence` builds, rescans and diffs each workspace at most once, shared by the verifier and all checkers. |
+| **Options + validation** | `EvalOptions` and `EvalOptionsValidator` reject an unknown mode, missing folders, a parallelism below 1, or a work root inside the repository. |
+| **Pure shared policy** | `TriagePolicy`, `TriageSnippets`, `FixEdits` (in `SecAgent.Agents`) and `ContextAssembler` were extracted from `TriageExecutor`, the fixers and `ContextBuilder`. The pipeline and the harness run the same decision and edit code. |
+| **Fakes in tests** | `FakeEvidence` and `FakeBuildRunner` replace `dotnet` in checker and end-to-end tests. Recordings are copied to temp folders and edited to simulate misses, unsafe proposals and regressions. |
