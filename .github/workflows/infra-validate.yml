@@ -1,0 +1,50 @@
+# Validates the Bicep under infra/ on every PR that touches it. No Azure login, no secrets, nothing deployed:
+# az bicep build / lint / build-params run fully offline against the linter rules in infra/bicepconfig.json.
+name: infra-validate
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra-validate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: infra-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bicep:
+    name: bicep build + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install / update Bicep for the Azure CLI
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install
+          az bicep version
+
+      - name: Build and lint all Bicep and parameter files
+        run: infra/validate.sh
+
+      - name: Lint report (SARIF, for the run summary)
+        if: always()
+        run: |
+          az bicep lint --file infra/main.bicep --diagnostics-format sarif > bicep-lint.sarif || true
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bicep-lint-sarif
+          path: bicep-lint.sarif
+          if-no-files-found: ignore
+
+      - name: Shell scripts (shellcheck)
+        run: shellcheck infra/deploy.sh infra/validate.sh
