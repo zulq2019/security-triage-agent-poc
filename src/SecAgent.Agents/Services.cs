@@ -24,6 +24,8 @@ public sealed class AgentServices
     public required FindingStateMachine States { get; init; }
     public required Dictionary<string, IFixer> Fixers { get; init; }
     public required string DataRoot { get; init; }
+    /// <summary>Optional: findings pushed by external scanners (SARIF / Black Duck intake). Null = local scanners only.</summary>
+    public IExternalFindingSource? External { get; set; }
 
     public static AgentServices Create(string repoRoot, string dataRoot, string sqlConnection)
     {

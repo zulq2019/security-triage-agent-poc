@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
+    <ProjectReference Include="../SecAgent.Intake/SecAgent.Intake.csproj" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
     <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.19.1" />

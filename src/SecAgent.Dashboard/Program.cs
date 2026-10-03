@@ -6,6 +6,7 @@ using OpenTelemetry.Trace;
 using SecAgent.Agents;
 using SecAgent.Agents.Workflow;
 using SecAgent.Core;
+using SecAgent.Intake;
 
 // ---------------------------------------------------------------------------------------------------------------
 // secagent serve [--port 8795]                         dashboard (live run via SSE) + API
@@ -110,10 +111,19 @@ builder.Services.AddOpenTelemetry()
 var svc = AgentServices.Create(repoRoot, dataRoot, sql);
 var runner = new RunService(svc);
 builder.Services.AddSingleton(svc);
+// SARIF / Black Duck intake (docs/intake.md): pushed results are stored, parsed to canonical findings and start a PR run like POST /api/runs.
+var intakeOpts = IntakeOptions.Load(repoRoot, dataRoot);
+var intake = IntakeHost.Create(intakeOpts, svc,
+    async (req, _) => (await runner.StartAsync(req.Repo, req.PrNumber!.Value, fresh: false, blockForReview: true)).State.Run.RunId,
+    () => !svc.Kill.IsOn && !RunService.AnyActive, msg => Console.WriteLine(svc.Masker.Mask(msg, false)));
+svc.External = intake.ExternalFindings;
 var app = builder.Build();
 var json = new JsonSerializerOptions(Schema.Json);
 app.UseDefaultFiles();
 app.UseStaticFiles();
+app.MapIntake(intake.Service, intake.Authenticator);
+_ = Task.Run(() => intake.Dispatcher.RunAsync(app.Lifetime.ApplicationStopping));
+intake.DropWatcher?.Start();
 
 app.MapPost("/api/runs", async (StartRun req) =>
 {
@@ -197,6 +207,8 @@ app.MapGet("/api/usage/facets", (HttpRequest q) =>
 
 var port = Arg("--port") ?? Environment.GetEnvironmentVariable("SECAGENT_PORT") ?? "8795";
 Console.WriteLine($"Security Triage & Fix Agent dashboard on http://localhost:{port} (config {svc.Cfg.Label})");
+Console.WriteLine($"Intake: POST /api/intake/{{sarif|blackduck-rapid}} {(intakeOpts.Enabled ? intakeOpts.HmacSecret != null ? "enabled" : $"refusing (set {intakeOpts.HmacSecretEnv})" : "disabled")}" +
+    (intake.DropWatcher != null ? $" · drop folder {intake.DropWatcher.Folder}" : ""));
 app.Run($"http://127.0.0.1:{port}");
 return 0;
 

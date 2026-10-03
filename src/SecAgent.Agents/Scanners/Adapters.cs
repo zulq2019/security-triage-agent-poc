@@ -5,7 +5,7 @@ using SecAgent.Core;
 
 namespace SecAgent.Agents.Scanners;
 
-static class Common
+public static class Common
 {
     public static string Sev(string? s) => (s ?? "").ToLowerInvariant() switch
     {

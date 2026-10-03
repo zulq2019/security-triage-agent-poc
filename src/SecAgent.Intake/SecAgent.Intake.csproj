@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- SARIF / Black Duck intake adapter: push-based (webhook or Blob drop), no polling of the Black Duck API. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
+  </ItemGroup>
+</Project>

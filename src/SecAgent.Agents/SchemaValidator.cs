@@ -7,13 +7,17 @@ namespace SecAgent.Agents;
 /// <summary>Validates adapter and agent outputs against the versioned JSON Schemas in rules/schema (section 7.1).</summary>
 public sealed class SchemaValidator(ConfigSnapshot cfg)
 {
-    readonly Dictionary<string, JsonSchema> _cache = [];
+    // Process-wide: JsonSchema.Net registers each schema's $id globally, so a second validator instance building the same schema
+    // would throw "Overwriting registered schemas is not permitted". Keyed by content so a changed schema is still rebuilt.
+    static readonly Dictionary<string, JsonSchema> Cache = [];
 
     public JsonSchema Get(string name)
     {
-        lock (_cache)
+        var text = cfg.Schemas[name];
+        var key = name + "|" + Hashing.Sha256(text);
+        lock (Cache)
         {
-            if (!_cache.TryGetValue(name, out var s)) _cache[name] = s = JsonSchema.FromText(cfg.Schemas[name]);
+            if (!Cache.TryGetValue(key, out var s)) Cache[key] = s = JsonSchema.FromText(text, new BuildOptions { SchemaRegistry = new SchemaRegistry() });
             return s;
         }
     }

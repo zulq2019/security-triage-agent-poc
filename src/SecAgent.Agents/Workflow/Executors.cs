@@ -35,6 +35,18 @@ public sealed class ScannersExecutor(AgentServices s, RunState r) : StepBase("sc
         var bs = ScanWithFeed(baseT, e2);
         var sets = await Task.WhenAll(hs, bs);
         int published = 0;
+        // Findings pushed by an external scanner (Black Duck via the intake endpoint) for this exact head commit join the head batch.
+        var external = S.External?.ForHead(pr.Repo, pr.HeadSha) ?? [];
+        foreach (var x in external)
+        {
+            foreach (var f in x.Findings)
+            {
+                f.CreatedByRun = RunId; f.PrNumber = pr.Number; f.Branch = pr.HeadRef; f.CommitSha = pr.HeadSha;
+                f.Attributes[ExternalFindingPolicy.IntakeIdAttribute] = x.IntakeId;
+            }
+            sets[0].Findings.AddRange(x.Findings);
+            Feed.Detail(e2, new { type = "evid", text = $"{x.Findings.Count} finding(s) from {x.Scanner} {x.ScannerVersion} pushed via intake {x.IntakeId} (raw: {x.RawEvidenceRef})" });
+        }
         foreach (var (label, set) in new[] { ("head", sets[0]), ("base", sets[1]) })
             foreach (var g in set.Findings.GroupBy(f => f.SourceScanner))
             {
@@ -866,7 +878,9 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         var remaining = findings.Where(f => after.Contains(MatchKey(f))).ToList();
         var headKeys = R.HeadFingerprints;
         var introduced = set.Findings.Where(f => !headKeys.Contains(f.Fingerprint) && !findings.Any(x => MatchKey(x) == MatchKey(f))).ToList();
-        var passed = remaining.Count == 0 && introduced.Count == 0 && tests.Ok;
+        // Externally reported findings (intake) cannot be confirmed gone by the local rescan: never claim them verified.
+        var unverifiable = ExternalFindingPolicy.NotLocallyVerifiable(findings);
+        var passed = remaining.Count == 0 && introduced.Count == 0 && tests.Ok && unverifiable.Count == 0;
 
         var sb = new StringBuilder();
         sb.AppendLine($"- Rescan ({string.Join(", ", set.Runs.Select(x => $"{x.Scanner} {x.Version}"))}): target finding{(findings.Count > 1 ? "s" : "")} {(remaining.Count == 0 ? "**gone** ✓" : "**still present** ✗")}; new findings introduced: **{introduced.Count}**{(introduced.Count > 0 ? " — " + string.Join("; ", introduced.Select(f => f.Title)) : "")}");
@@ -901,10 +915,11 @@ public sealed class VerifierExecutor(AgentServices s, RunState r) : StepBase("ve
         if (remaining.Count > 0) why.Add($"target still detected by {string.Join(",", remaining.Select(f => f.SourceScanner))}");
         if (introduced.Count > 0) why.Add($"new findings: {string.Join("; ", introduced.Select(f => f.Title))}");
         if (!tests.Ok) why.Add(tests.BuildFailed ? "build failed: " + tests.FailureText : $"{tests.Failed} test(s) failed: {tests.FailureText}");
+        if (unverifiable.Count > 0) why.Add($"reported by {string.Join(",", unverifiable.Select(f => f.SourceScanner).Distinct())} via intake: the local rescan cannot confirm it is gone; needs a re-scan of the fix branch by that scanner");
         fix.VerificationResult = "failed"; fix.FailureReason = S.Masker.Mask(string.Join(" | ", why), false); fix.UpdatedAt = DateTime.UtcNow; S.Store.UpdateFix(fix);
         foreach (var f in findings) Move(f, Status.VerifyFailed, "verify_fail", "verifier");
         var max = S.Cfg.Policies.Retries.MaxFixRetries;
-        if (p.AttemptNo <= max)
+        if (p.AttemptNo <= max && unverifiable.Count == 0)   // retrying cannot make an external finding locally verifiable
         {
             lock (R.Lock) R.RetriesUsed++;
             PublishGuards();
