@@ -65,7 +65,7 @@ secagent-intake-v1
 ```
 
 Signing the metadata (not just the body, as GitHub webhooks do) means a captured upload cannot be replayed against another repo,
-PR or commit. Comparison is constant-time. Reference implementations: `HmacIntakeAuthenticator.Sign` (C#) and the bash/python step in
+PR or commit. Comparison is constant-time. Reference implementations: `IntakeSignature.Sign` (C#, `SecAgent.Abstractions`) and the bash/python step in
 `.github/workflows/examples/blackduck-push.yml`, which the test suite runs against a live test server.
 
 **Idempotency key** = sha256(repo | head sha | scanner | run id | format). The PR number is deliberately not part of it (the same
@@ -91,7 +91,7 @@ commit scanned by the same workflow run is the same evidence).
 * **Raw file**: stored write-once at `intake/<repo>/<sha>/<scanner>-<run id>.<format>.json` through `IRawFindingStore`
   (local: `.data/blob/raw/…`; Azure: the same path in a Blob container). Secret snippets are removed before storage.
 * **Canonical findings**: the same `Finding` record and JSON schema the built-in gitleaks/Trivy/Semgrep adapters produce
-  (severity mapping reuses `Common.Sev`), stored next to the raw file as `.canonical.json`, each tagged `attributes.intake_id`.
+  (severity mapping reuses `FindingNormalisation.Severity`, shared with the built-in adapters), stored next to the raw file as `.canonical.json`, each tagged `attributes.intake_id`.
 * **Run**: `IRunStarter` enqueues a message (local queue `intake-runs`, message id = idempotency key; Azure: a Service Bus queue
   with duplicate detection on the same id). The dispatcher waits until no run is active and the kill switch is off, then starts the
   same PR run `POST /api/runs` starts. During that run the scanner stage adds the pushed findings for that exact repo + head SHA to its
@@ -163,6 +163,13 @@ should push the rapid-scan JSON (keep it with `--detect.cleanup=false`), and SAR
 | `AllowedScanners` | `["blackduck"]` | |
 | `AllowedRepos` | `[]` (any) | e.g. `["my-org/*"]` |
 | `DropWatcherEnabled` / `DropFolder` | `false` / `.data/intake/drop` | dev Blob stand-in; env `SECAGENT_INTAKE_DROP_WATCHER=1` |
+| `StorageRoot` | set by the host (`.data`) | root of the local adapters: `RawStoreRoot` (`blob`), `LedgerFolder` (`intake/ledger`), `DropFolder` |
+| `DispatcherEnabled` | `true` | run the queue → pipeline dispatcher in this process |
+| `DefaultBlobFormat` | `sarif` | for dropped blobs without `format` metadata that no parser recognises by name |
+| `Adapters:RawStore` / `Ledger` / `RunQueue` / `BlobReader` | `local` | `azure-blob` (RawStore, BlobReader) / `azure-servicebus` (RunQueue) after `AddSecAgentIntakeAzure`; see "Swapping in Azure services" |
+
+Options are bound with the Options pattern and **validated on start** (bad ranges, missing storage root, or an adapter key with no
+registered implementation stop the host with a clear message). Any key can also come from an env var (`Intake__MaxBodyBytes=…`).
 
 Secret: generate once (`openssl rand -hex 32`), put it in the GitHub secret `INTAKE_HMAC_SECRET` and in the agent's environment
 (`~/.secagent/secagent.env` locally). In Azure App Service use a Key Vault reference:
@@ -196,7 +203,7 @@ metadata as blob metadata (`repo`, `pr`, `ref`, `head_sha`, `scanner`, `run_id`,
 calls `IntakeFromBlobHandler`, which reads the blob (`IBlobReader`, managed identity) and goes through the same validation, dedupe,
 parse and enqueue path. There is no HMAC on this path: trust comes from RBAC on the container (only the workflow's federated identity
 can write). **TODO** for the Azure version: Event Grid webhook validation handshake (or an Azure Function / Service Bus subscription
-in front), and an `IBlobReader` using `Azure.Storage.Blobs`.
+in front). The blob reader itself exists: `AzureBlobReader` in `SecAgent.Intake.Azure`.
 
 Local dev stand-in: set `SECAGENT_INTAKE_DROP_WATCHER=1`, then drop `x.sarif.json` plus `x.sarif.json.meta.json`
 (`{"format":"sarif","repo":"synthetic-org/sample-orders","pr":7,"ref":"feature/x","head_sha":"<40 hex>","scanner":"blackduck","run_id":"local-1"}`)
@@ -211,13 +218,26 @@ shared secret to rotate. Not implemented in this slice; the interface is ready.
 
 ## Swapping in Azure services
 
-| Interface | Local (this repo) | Azure |
+Every port has a local adapter; the Azure ones live in `src/SecAgent.Intake.Azure` (Entra ID auth via `DefaultAzureCredential`, no keys)
+and are chosen by configuration, with no code change in the intake:
+
+```csharp
+builder.Services.AddSecAgentIntake(builder.Configuration);
+builder.Services.AddSecAgentIntakeAzure(builder.Configuration);   // registers the "azure-*" adapters
+// appsettings: "Intake": { "Adapters": { "RawStore": "azure-blob", "BlobReader": "azure-blob", "RunQueue": "azure-servicebus" },
+//                          "Azure": { "BlobServiceUri": "https://<acct>.blob.core.windows.net", "ServiceBusNamespace": "<ns>.servicebus.windows.net" } }
+```
+
+| Port (SecAgent.Abstractions) | Local adapter (`local`) | Azure adapter |
 |---|---|---|
-| `IRawFindingStore` | `LocalRawFindingStore` over the write-once local blob store | Blob container (immutability policy optional) |
-| `IIntakeLedger` | `FileIntakeLedger` (atomic create-new claim files) | SQL table with a unique index on the idempotency key, or Table Storage |
-| `IRunStarter` | `QueueRunStarter` (local queue, message id = key) | Service Bus queue, duplicate detection on `MessageId` |
-| `IIntakeAuthenticator` | `HmacIntakeAuthenticator` | same + OIDC option |
-| `IBlobReader` / blob events | `LocalFileDropWatcher` | Event Grid `BlobCreated` → `IntakeFromBlobHandler` |
+| `IRawFindingStore` | `LocalRawFindingStore` over the write-once local blob store | `AzureBlobRawFindingStore` (create-only uploads, same `blob://raw/…` URIs) |
+| `IIntakeLedger` + `IIntakeRecordQuery` | `FileIntakeLedger` (atomic create-new claim files) | TODO: SQL table with a unique key, or Table Storage |
+| `IRunStarter` + `IIntakeRunSource` | `LocalIntakeRunQueue` (in-process queue, message id = key) | `ServiceBusIntakeRunQueue` (duplicate detection on `MessageId`) |
+| `IBlobReader` | `LocalDropFolderBlobReader` (drop folder only) | `AzureBlobReader` (managed identity) |
+| `IIntakeAuthenticator` | `HmacIntakeAuthenticator` | same; OIDC option is a TODO |
+| `IIntakeSecretProvider` | `EnvironmentIntakeSecretProvider` (env var; Key Vault reference in App Service) | same, or a `SecretClient` provider |
+
+The Azure adapters compile and are wired by tests, but have not been run against a live subscription. Design notes: [design-principles.md](design-principles.md).
 
 ## What to ask the Black Duck admin for
 

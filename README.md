@@ -12,7 +12,7 @@ Agents open PRs only. They have no merge rights, and no code path can merge. The
 - Store: SQL Server 2022 (local), standing in for Azure SQL. Evidence goes to a write-once local blob folder, standing in for Azure Blob.
 - Live dashboard: ASP.NET + SSE (`secagent serve`)
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, [docs/PROGRESS.md](docs/PROGRESS.md) for the build log, and [docs/intake.md](docs/intake.md) for pushing Black Duck / SARIF results from GitHub Actions into the agent.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, [docs/PROGRESS.md](docs/PROGRESS.md) for the build log, [docs/intake.md](docs/intake.md) for pushing Black Duck / SARIF results from GitHub Actions into the agent, and [docs/design-principles.md](docs/design-principles.md) for the intake design (SOLID, DI composition root, ports & adapters).
 
 ## Model provider: a pure config switch
 
