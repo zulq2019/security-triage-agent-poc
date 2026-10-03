@@ -200,7 +200,7 @@ another's secrets. The shared model deployment sits in `Defaults`.
 }
 ```
 
-Both examples are loaded and validated by a test (`ConnectorDocsTests`), so they stay correct.
+Both examples are loaded and validated by a test (`ConnectorCompositionTests`), so they stay correct.
 
 ### Running everything against fakes
 

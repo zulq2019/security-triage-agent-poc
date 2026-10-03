@@ -12,7 +12,7 @@ Agents open PRs only. They have no merge rights, and no code path can merge. The
 - Store: SQL Server 2022 (local), standing in for Azure SQL. Evidence goes to a write-once local blob folder, standing in for Azure Blob.
 - Live dashboard: ASP.NET + SSE (`secagent serve`)
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, [docs/PROGRESS.md](docs/PROGRESS.md) for the build log, [docs/intake.md](docs/intake.md) for pushing Black Duck / SARIF results from GitHub Actions into the agent, and [docs/design-principles.md](docs/design-principles.md) for the intake design (SOLID, DI composition root, ports & adapters).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, [docs/PROGRESS.md](docs/PROGRESS.md) for the build log, [docs/intake.md](docs/intake.md) for pushing Black Duck / SARIF results from GitHub Actions into the agent, [docs/connectors.md](docs/connectors.md) for the connector layer (GitHub, Jira, Black Duck, model provider, Teams behind plug-in interfaces, with fakes; single- and multi-tenant configuration), and [docs/design-principles.md](docs/design-principles.md) for the design principles (SOLID, DI composition roots, ports & adapters).
 
 ## Model provider: a pure config switch
 
@@ -26,7 +26,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mappi
 | `Providers.<p>.SmallModel` / `StrongModel` | `SECAGENT_SMALL_MODEL` / `SECAGENT_STRONG_MODEL` | OpenAI defaults are **placeholders** (`gpt-6-luna` / `gpt-6.1-sol`): set them to the models on your account. For Azure, use your deployment names |
 | `Providers.<p>.ApiKeyEnv` | (the key itself) | `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY`. **The key is read only from that environment variable and is never written to a file, a log or the store** |
 
-Only the provider, endpoint and models change. The routing policy (task → tier, escalation, budgets, schema validation, kill switch) stays in `rules/gateway/models.yaml`. The provider choice is part of the hashed config snapshot that every run records. Hosted providers default to `MaxConcurrentCalls: 4`, no temperature/seed (reasoning-family models reject them), a 4096-token output reserve and a 250k-token run budget.
+This switch now feeds the model provider **connector** (`openai-compatible`), see [docs/connectors.md](docs/connectors.md); a `Connectors` entry can override it per tenant. Only the provider, endpoint and models change. The routing policy (task → tier, escalation, budgets, schema validation, kill switch) stays in `rules/gateway/models.yaml`. The provider choice is part of the hashed config snapshot that every run records. Hosted providers default to `MaxConcurrentCalls: 4`, no temperature/seed (reasoning-family models reject them), a 4096-token output reserve and a 250k-token run budget.
 
 ## Windows laptop (16 GB) with the OpenAI API
 
