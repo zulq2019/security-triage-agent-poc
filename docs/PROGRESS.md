@@ -27,3 +27,8 @@ Times are IST (UTC+5:30).
   - P1: ledger PRs are revalidated before reuse (superseded otherwise); `--fresh` bypasses the reuse short-circuit.
   - P1: `max_fixes` and `max_minutes` are enforced, with a push gate and Guardrails rows.
   - 76/76 tests pass. No new live run: scoped keys would make a live re-run on the sample PR re-fix and open new GitHub PRs.
+- 2026-10-03 ~19:30: **SARIF / Black Duck intake** (branch `feature/sarif-intake`, stacked on PR #1):
+  - New `src/SecAgent.Intake`: `POST /api/intake/{sarif|blackduck-rapid}` (HMAC `secagent-intake-v1` over metadata + body hash, ±300 s window), size/metadata/schema checks, idempotency key repo+sha+scanner+run(+format), write-once raw store (`IRawFindingStore`), SARIF 2.1.0 and Black Duck rapid-scan parsers (`IFindingParser`, mapping assumptions isolated in `BlackDuckRapidFieldMap` / `BlackDuckSarifHints`), `IRunStarter` queue + dispatcher that starts the normal PR run, Blob/Event Grid handler abstraction with a local drop-folder watcher.
+  - Pushed findings join the scanner stage for the same repo + head SHA; the verifier never auto-verifies them (local re-scan cannot see Black Duck results) → human.
+  - Example workflows in `.github/workflows/examples/` (inactive): PR push of rapid JSON, nightly SARIF on main (backlog mode), Blob upload alternative. Docs: `docs/intake.md`.
+  - Synthetic fixtures only. 137/137 tests pass (76 existing + 61 new, including real-HTTP end-to-end tests that also run the example workflow's sign-and-POST bash).

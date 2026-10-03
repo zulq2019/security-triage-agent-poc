@@ -71,6 +71,7 @@ In the POC, the gateway writes one `ModelUsage` row per call to SQL, and the das
 | `src/SecAgent.Agents/Llm` | ContextBuilder, ModelGateway, LlmStep (pack → route → call → validate → record) |
 | `src/SecAgent.Agents/Fixers` | Library, Secrets, UnsafeCode, BinaryLicence fixers |
 | `src/SecAgent.Agents/Workflow` | Agent Framework executors, workflow graph, RunService (checkpoints, kill switch, review) |
+| `src/SecAgent.Intake` | Push intake for external scanner results (Black Duck via GitHub Actions): `POST /api/intake/{sarif\|blackduck-rapid}` with HMAC signature, SARIF 2.1.0 + Black Duck rapid-scan parsers, idempotency ledger, raw store, run queue, Blob/drop-folder path. See [intake.md](intake.md) |
 | `src/SecAgent.Dashboard` | `secagent` CLI + ASP.NET dashboard (SSE live feed, findings, controls) |
 | `rules/` | Rules-as-code: policies, routing, gateway, context, rule packs, prompts, JSON schemas, golden expectations |
 | `db/schema.sql`, `db/migrations/` | Store schema and idempotent migrations (002 = ModelUsage + backfill) |
