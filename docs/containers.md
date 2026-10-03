@@ -102,6 +102,9 @@ Rules every image follows:
 - Multi-stage build. Restore is cached on the project files, and BuildKit cache mounts are used for NuGet. Release binaries only.
 - Base images are pinned by digest. Tool binaries are pinned by version **and** sha256 (amd64 and arm64). There are no `curl | sh` install
   scripts and no `latest` tags.
+- gitleaks is built from its pinned, checksummed v8.30.1 source with Go 1.26.8 and current `golang.org/x/crypto` / `x/text`. The
+  official v8.30.1 binary (the latest release) is built with Go 1.24.11, and the CI image gate failed on 33 fixable HIGH/CRITICAL CVEs
+  in it. The rebuilt binary scans clean. Switch back to the release binary once upstream ships one built with a current Go.
 - Runs as non-root user `app` (UID 1654). Works with a read-only root file system: writable paths are only `/tmp` (tmpfs) and `/data`.
 - `HEALTHCHECK` uses `secagent-worker probe`, because the chiselled image has no curl.
 - `.dockerignore` is an allow-list: only `src/`, `rules/`, `db/`, `deploy/agents.json` and the build files go into the build context. It

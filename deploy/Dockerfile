@@ -14,6 +14,8 @@
 ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317
 ARG ASPNET_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0-noble@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
 ARG CHISELED_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:00e0ad6a7ef8c0c1391b87f05c7ac757a15740455688f2bfcd146a3f4b987efd
+# Go toolchain only for rebuilding gitleaks (see the gitleaks stage). golang 1.26.8.
+ARG GO_IMAGE=golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # Build: restore (cached layer, only project files), then publish each host in its own stage so a target builds only what it needs.
@@ -54,13 +56,32 @@ COPY src/SecAgent.Dashboard/wwwroot/ src/SecAgent.Dashboard/wwwroot/
 RUN mkdir -p /data-template && chmod -R a+rX /content
 
 # ------------------------------------------------------------------------------------------------------------------------------------
-# Scanner tools: release binaries pinned by version AND sha256 (from each release's checksums file). No install scripts, no `latest`.
+# gitleaks: built from the pinned, checksummed source tag with a current Go toolchain. The v8.30.1 release binary (latest release) is
+# built with Go 1.24.11 and old golang.org/x modules, and the image scan in CI fails on ~30 fixable HIGH/CRITICAL CVEs in it. Same
+# gitleaks code; only the Go standard library and x/crypto, x/text (indirect deps) move to fixed versions. Cross-compiles for TARGETARCH.
+# ------------------------------------------------------------------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS gitleaks
+ARG TARGETARCH
+ARG GITLEAKS_VERSION=8.30.1
+ARG GITLEAKS_SRC_SHA256=e90fb266d75837e75894c778bf594ab8e2787f12dce5a62651f21b893eaf9abb
+ARG X_CRYPTO_VERSION=v0.55.0
+ARG X_TEXT_VERSION=v0.41.0
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+WORKDIR /src
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
+RUN --mount=type=cache,id=secagent-gomod,target=/go/pkg/mod \
+    curl -fsSLo src.tgz "https://github.com/gitleaks/gitleaks/archive/refs/tags/v${GITLEAKS_VERSION}.tar.gz"; \
+    echo "${GITLEAKS_SRC_SHA256}  src.tgz" | sha256sum -c -; \
+    tar -xzf src.tgz --strip-components=1; \
+    go get "golang.org/x/crypto@${X_CRYPTO_VERSION}" "golang.org/x/text@${X_TEXT_VERSION}"; \
+    go mod tidy; \
+    GOARCH="${TARGETARCH:-amd64}" go build -ldflags "-s -w -X=github.com/zricethezav/gitleaks/v8/version.Version=v${GITLEAKS_VERSION}" -o /out/gitleaks .
+
+# ------------------------------------------------------------------------------------------------------------------------------------
+# Other tools: release binaries pinned by version AND sha256 (from each release's checksums file). No install scripts, no `latest`.
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM ${SDK_IMAGE} AS tools
 ARG TARGETARCH
-ARG GITLEAKS_VERSION=8.30.1
-ARG GITLEAKS_SHA256_AMD64=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
-ARG GITLEAKS_SHA256_ARM64=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080
 ARG TRIVY_VERSION=0.75.0
 ARG TRIVY_SHA256_AMD64=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
 ARG TRIVY_SHA256_ARM64=a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3
@@ -69,15 +90,12 @@ ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c601
 ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /tmp/tools
+COPY --from=gitleaks /out/gitleaks /opt/tools/bin/gitleaks
 RUN case "${TARGETARCH:-amd64}" in \
-      amd64) GL=x64;   TV=64bit; GA=amd64; GL_SHA=${GITLEAKS_SHA256_AMD64}; TV_SHA=${TRIVY_SHA256_AMD64}; GH_SHA=${GH_SHA256_AMD64} ;; \
-      arm64) GL=arm64; TV=ARM64; GA=arm64; GL_SHA=${GITLEAKS_SHA256_ARM64}; TV_SHA=${TRIVY_SHA256_ARM64}; GH_SHA=${GH_SHA256_ARM64} ;; \
+      amd64) TV=64bit; GA=amd64; TV_SHA=${TRIVY_SHA256_AMD64}; GH_SHA=${GH_SHA256_AMD64} ;; \
+      arm64) TV=ARM64; GA=arm64; TV_SHA=${TRIVY_SHA256_ARM64}; GH_SHA=${GH_SHA256_ARM64} ;; \
       *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    mkdir -p /opt/tools/bin; \
-    curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${GL}.tar.gz"; \
-    echo "${GL_SHA}  gitleaks.tgz" | sha256sum -c -; \
-    tar -xzf gitleaks.tgz -C /opt/tools/bin gitleaks; \
     curl -fsSLo trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TV}.tar.gz"; \
     echo "${TV_SHA}  trivy.tgz" | sha256sum -c -; \
     tar -xzf trivy.tgz -C /opt/tools/bin trivy; \
