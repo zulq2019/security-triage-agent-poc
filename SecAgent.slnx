@@ -4,10 +4,12 @@
     <Project Path="src/SecAgent.Agents/SecAgent.Agents.csproj" />
     <Project Path="src/SecAgent.Core/SecAgent.Core.csproj" />
     <Project Path="src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+    <Project Path="src/SecAgent.Eval/SecAgent.Eval.csproj" />
     <Project Path="src/SecAgent.Intake/SecAgent.Intake.csproj" />
     <Project Path="src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/SecAgent.Eval.Tests/SecAgent.Eval.Tests.csproj" />
     <Project Path="tests/SecAgent.Tests/SecAgent.Tests.csproj" />
   </Folder>
 </Solution>
