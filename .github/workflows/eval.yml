@@ -1,0 +1,109 @@
+# Golden-set evaluation of the Security Triage & Fix Agent (docs/evaluation.md).
+#  - Every PR: replay mode. Model answers come from the recordings committed with each case, so the run is deterministic, needs no
+#    model or secret and costs nothing. Fails the PR when a gate in eval/golden/gates.json fails (pass rate, regression against
+#    eval/golden/baseline.json, unsafe outcomes, harness errors). The Markdown report is posted as the job summary.
+#  - Nightly / manual: optional live mode against a hosted model. Skipped unless the provider key secret is configured.
+#    Live results are informational (continue-on-error) and never update the baseline.
+name: eval
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "replay or live"
+        required: false
+        default: "replay"
+  schedule:
+    - cron: "30 20 * * *"   # 02:00 IST
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  replay:
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'live')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build
+        run: dotnet build SecAgent.slnx
+      - name: Harness and checker tests
+        run: dotnet test tests/SecAgent.Eval.Tests --no-build
+      - name: Golden set (replay mode)
+        id: eval
+        env:
+          SECAGENT_HMAC_KEY: ci-test-only-hmac-key   # synthetic secrets only; not a real key
+        run: |
+          set +e
+          dotnet run --project src/SecAgent.Eval --no-build -- run --mode replay --out eval/out
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ -f eval/out/eval-report.md ]; then cat eval/out/eval-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit 0
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-replay-report
+          path: eval/out/
+          if-no-files-found: warn
+      - name: Gate
+        run: |
+          code="${{ steps.eval.outputs.exit_code }}"
+          if [ "$code" = "0" ]; then echo "Evaluation gate passed"; exit 0; fi
+          if [ "$code" = "1" ]; then echo "::error::Evaluation gate failed (see the job summary)"; else echo "::error::Evaluation harness error (exit $code)"; fi
+          exit 1
+
+  live:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'live')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: true
+    env:
+      # Placeholders: configure in Settings → Secrets and variables → Actions. Without the key secret the job is skipped.
+      SECAGENT_MODEL_PROVIDER: ${{ vars.SECAGENT_MODEL_PROVIDER || 'openai' }}   # openai | azureopenai
+      SECAGENT_SMALL_MODEL: ${{ vars.SECAGENT_SMALL_MODEL }}
+      SECAGENT_STRONG_MODEL: ${{ vars.SECAGENT_STRONG_MODEL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      SECAGENT_HMAC_KEY: ci-test-only-hmac-key
+    steps:
+      - name: Check provider secret
+        id: key
+        run: |
+          if [ -n "$OPENAI_API_KEY" ] || [ -n "$AZURE_OPENAI_API_KEY" ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else
+            echo "present=false" >> "$GITHUB_OUTPUT"; echo "No model provider secret configured: live evaluation skipped." >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
+      - uses: actions/setup-dotnet@v4
+        if: steps.key.outputs.present == 'true'
+        with:
+          dotnet-version: "10.0.x"
+      - name: Golden set (live mode)
+        if: steps.key.outputs.present == 'true'
+        run: |
+          set +e
+          dotnet run --project src/SecAgent.Eval -- run --mode live --parallel 2 --out eval/out
+          code=$?
+          if [ -f eval/out/eval-report.md ]; then cat eval/out/eval-report.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit $code
+      - name: Upload report
+        if: always() && steps.key.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-live-report
+          path: eval/out/
+          if-no-files-found: warn
