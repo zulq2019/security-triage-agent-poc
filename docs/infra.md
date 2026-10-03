@@ -43,6 +43,36 @@ The same template deploys both business models; only the parameter file changes:
 
 `infra/params/dev.bicepparam` is the cheap, public-endpoint shape for a first try-out (one synthetic tenant).
 
+## Design principles
+
+The Bicep follows the same rules as the application code: small parts, loose coupling, data over code.
+
+1. **Single-purpose modules.** Each file in `infra/modules/` does one thing (a Service Bus namespace and its
+   entities, a set of Key Vaults, one Container App, one private endpoint, a set of role assignments). Modules
+   do not create role assignments for other resources or know about agents.
+2. **Typed contracts.** Shared user-defined types live in `infra/types.bicep` (`agentSpec`, `agentOverride`,
+   `roleAssignmentSpec`, `ingressSpec`, `scaleSpec`, `queueSpec`, `containerSpec`, `modelDeployment`,
+   `sqlEntraAdmin`, ...). Module inputs and outputs use them, so a wrong shape fails at `bicep build`, not in Azure.
+3. **No cross-module names.** Modules receive ids, names and endpoints from other modules' **outputs** (for
+   example `serviceBus.outputs.queueIds`, `storage.outputs.containerIds`, `keyVaults.outputs.vaults`). No module
+   looks up another module's resource by a hard-coded name. The naming convention lives in one place,
+   `main.bicep`.
+4. **Agents are data (open for extension, closed for modification).** The agent catalogue in
+   `infra/agents.bicep` is a typed list. `main.bicep` derives everything from it: identities, Container Apps
+   (one generic `containerapp.bicep` call per agent), queues (everything consumed or sent), topic subscriptions,
+   KEDA rules and role assignments. The orchestrator is marked `dispatchesWork`, so it can send to every worker
+   queue, including new ones. Adding an agent means adding one entry, in `agents.bicep` or in a parameter file's
+   `additionalAgents`.
+5. **Differences live in parameter files.** `main.bicep` has no `if environment == ...` or
+   `if deploymentModel == ...` logic. Multi-tenancy follows `tenants`, networking follows
+   `enablePrivateNetworking`, sizes, SKUs and per-agent settings (`agentOverrides`) are all parameters.
+   `deploymentModel` is only a label for tags and `SECAGENT_PROFILE`.
+6. **Least privilege through one reusable module.** `role-assignments.bicep` takes (principal, built-in role,
+   resource id) triples and assigns each one at that exact resource: one queue, one subscription, one container,
+   one vault. The triples are generated from the agent list, so an agent can only reach what its entry declares.
+7. **No secrets in code.** Entra ID everywhere (SAS, shared keys, local auth and SQL logins are off). Secret
+   values are set in Key Vault by operators and referenced, never passed through the template.
+
 ## Diagram
 
 ```mermaid
@@ -110,9 +140,9 @@ Every resource is tagged `workload`, `environment`, `deploymentModel`, `owner`, 
 | Action group | `ag-secagent-dev-uks` | monitoring | Only if `alertEmailReceivers` is set; used by the dead-letter alert |
 | VNet, 2 subnets, 2 NSGs, private DNS zones | `vnet-secagent-prd-uks` | network | Only with `enablePrivateNetworking`; `snet-aca` (delegated) and `snet-pe` |
 | Private endpoints | `pe-<target>` | privateendpoint | Blob, every Key Vault, SQL, Service Bus (Premium), Azure OpenAI, ACR (Premium) |
-| User-assigned identities ×12 | `id-orchestrator-dev`, … | identity | One per app (SDD 13.1) |
+| User-assigned identities ×11 | `id-orchestrator-dev`, … | identity | One per agent (SDD 13.1) |
 | Key Vault (platform) | `kv-secagent-dev-xxxxx` | keyvault | RBAC mode, soft delete, purge protection (param), audit logs; no secrets created |
-| Key Vault per tenant | `kv-<tenant>-dev-xxxxx` | keyvault | Wipro-hosted only; connector tokens per customer (SDD 18.1) |
+| Key Vault per tenant | `kv-<tenant>-dev-xxxxx` | keyvault | One per entry in `tenants` (Wipro-hosted); connector tokens per customer (SDD 18.1) |
 | Service Bus namespace | `sb-secagent-dev-uks-xxxxx` | servicebus | Local (SAS) auth off, TLS 1.2; Standard (dev) or Premium |
 | Queues | `runs`, `scan`, `triage`, `fix-library`, `fix-secret`, `fix-code`, `fix-binary`, `verify`, `results` | servicebus | Sessions (SessionId = run id), duplicate detection, max delivery count, lock duration, TTL, dead-letter on expiry |
 | Topic + subscriptions | `run-events` → `dashboard`, `audit` (+ `extraTopicSubscriptions`) | servicebus | Pub/sub for run progress |
@@ -123,10 +153,13 @@ Every resource is tagged `workload`, `environment`, `deploymentModel`, `owner`, 
 | Azure OpenAI (optional) | `oai-secagent-dev-uks-xxxxx` | openai | Local auth off; deployments `small` / `strong` from parameters |
 | Container registry | `crsecagentdevxxxxx` | acr | Admin user off; apps pull with AcrPull |
 | Container Apps environment | `cae-secagent-dev-uks` | containerapps-env | Workload profiles (Consumption), logs via Azure Monitor (no workspace key), optional VNet / internal / zone redundancy |
-| Container Apps ×12 | `ca-intake-dev`, `ca-agent-api-dev`, `ca-orchestrator-dev`, `ca-scanner-dev`, `ca-triage-dev`, `ca-fixer-<type>-dev` ×4, `ca-verifier-dev`, `ca-audit-writer-dev` | containerapp (reusable) | KEDA `azure-servicebus` rule per consumed queue / subscription, authenticated with the app's identity |
-| Role assignments | — | rbac | Per app, scoped to the queue / topic / subscription / container / vault (table below) |
+| Container Apps ×11 | `ca-intake-dev`, `ca-agent-api-dev`, `ca-orchestrator-dev`, `ca-scanner-dev`, `ca-triage-dev`, `ca-fixer-<type>-dev` ×4, `ca-verifier-dev`, `ca-audit-writer-dev` | containerapp (generic, one call per agent) | KEDA `azure-servicebus` rule per consumed queue / subscription, authenticated with the agent's identity |
+| Role assignments | — | role-assignments (generic) | Derived from the agent list; each scoped to one queue / topic / subscription / container / vault (table below) |
 
-### Access per app (least privilege)
+### Access per agent (least privilege)
+
+This table is what the catalogue in `infra/agents.bicep` declares; the role assignments, queues, subscriptions
+and KEDA rules are generated from it.
 
 | App | Service Bus | Blob | Key Vault | SQL role (grant script) | Azure OpenAI | Ingress |
 |---|---|---|---|---|---|---|
@@ -139,7 +172,8 @@ Every resource is tagged `workload`, `environment`, `deploymentModel`, `owner`, 
 | verifier | receive `verify`; send `results` | read `raw*`; write `evidence*` | — | inserter | OpenAI User | none |
 | audit-writer | receive sub `audit` | write `evidence*` | — | inserter | — | none |
 
-Every app also gets AcrPull on the registry. Azure SQL access is not Azure RBAC: `main.bicep` outputs a T-SQL
+Every agent also gets AcrPull on the registry. The Key Vault operators group gets Key Vault Secrets Officer on
+every vault. Azure SQL access is not Azure RBAC: `main.bicep` outputs a T-SQL
 script (`sqlGrantScript`) that creates a contained database user per identity (from its client id, so the SQL
 server needs no directory-read permission) and adds it to `secagent_reader`, `secagent_inserter` or
 `secagent_writer`. Those three roles are schema-wide; narrowing them to table-level grants is an open item.
@@ -152,8 +186,8 @@ server needs no directory-read permission) and adds it to `secagent_reader`, `se
 `APPLICATIONINSIGHTS_CONNECTION_STRING`; plus `SECAGENT_SQL` (passwordless connection string,
 `Authentication=Active Directory Managed Identity`) for apps with a SQL role, and `SECAGENT_MODEL_PROVIDER`,
 `SECAGENT_MODEL_BASE_URL`, `SECAGENT_SMALL_MODEL`, `SECAGENT_STRONG_MODEL` for model apps when a model endpoint
-is configured. Secrets (for example `SECAGENT_HMAC_KEY`) are added as **Key Vault references** with the
-`appKeyVaultReferences` parameter once the secret exists in the vault.
+is configured. Secrets (for example `SECAGENT_HMAC_KEY`) are added as **Key Vault references** with
+`agentOverrides.<agent>.keyVaultReferences` once the secret exists in the vault.
 
 > The POC code today reads `SECAGENT_SQL`, `SECAGENT_HMAC_KEY` and the `SECAGENT_MODEL_*` variables. The other
 > names are a proposed contract for the Service Bus / Blob / Key Vault adapters that the code does not have yet.
@@ -162,7 +196,9 @@ is configured. Secrets (for example `SECAGENT_HMAC_KEY`) are added as **Key Vaul
 
 ```
 infra/
-  main.bicep                 composes everything for one environment (resource-group scope)
+  main.bicep                 composition root: naming, derivation from the agent list, wiring of module outputs
+  types.bicep                shared user-defined types (agentSpec, agentOverride, roleAssignmentSpec, ...) + built-in role ids
+  agents.bicep               the agent catalogue (data only) + blob layout + topic name
   rg.bicep                   optional: creates the resource group (subscription scope)
   bicepconfig.json           linter rules (CI fails on any error)
   validate.sh                build + lint + build-params for every file (used locally and in CI)
@@ -172,9 +208,11 @@ infra/
     wipro-hosted.bicepparam  model 1, prod shape, multi-tenant
     customer-hosted.bicepparam  model 2, prod shape, single tenant
   modules/
-    network.bicep  privateendpoint.bicep  monitoring.bicep  identity.bicep  rbac.bicep
+    network.bicep  privateendpoint.bicep  monitoring.bicep  identity.bicep
     keyvault.bicep  servicebus.bicep  sql.bicep  storage.bicep  acr.bicep  openai.bicep
-    containerapps-env.bicep  containerapp.bicep (reusable, KEDA azure-servicebus scaler)
+    containerapps-env.bicep
+    containerapp.bicep         generic: one Container App with KEDA azure-servicebus rules (called once per agent)
+    role-assignments.bicep     generic: role assignments from (principal, built-in role, resource id) triples
 .github/workflows/infra-validate.yml   runs infra/validate.sh on PRs touching infra/ (no Azure login)
 ```
 
@@ -212,7 +250,7 @@ export SECAGENT_KV_OPERATORS_GROUP_ID=<object id of the Key Vault operators grou
    ```
    Add `--create-rg` only if you have rights to create resource groups in the subscription.
 3. Onboarding a new customer tenant = add its code to `tenants` and redeploy. This creates its vault and
-   containers and grants the shared apps access to them.
+   containers and grants the shared agents access to them.
 
 ### Model 2: Customer-hosted
 
@@ -226,6 +264,8 @@ export SECAGENT_KV_OPERATORS_GROUP_ID=<object id of the Key Vault operators grou
    ```
 3. Nothing in the deployment points back to Wipro: images are built into the customer's own registry and the
    models are the customer's own.
+4. Customer extensions (SDD 20), for example an in-house fixer, go in `additionalAgents` in their parameter
+   file (example in `customer-hosted.bicepparam`). No module or `main.bicep` change is needed.
 
 ### After the first deployment (both models)
 
@@ -235,14 +275,15 @@ export SECAGENT_KV_OPERATORS_GROUP_ID=<object id of the Key Vault operators grou
    `db/schema.sql`, the migrations in `db/migrations/`, then the generated `infra/out/<deployment>.sql-grants.sql`
    (`sqlcmd -G`).
 2. **Secrets:** a member of the Key Vault operators group sets secret values (HMAC key, GitHub App key, webhook
-   signing secret, Black Duck / Jira tokens per tenant). Then list them per app in `appKeyVaultReferences`, for
-   example `{ orchestrator: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ] }`, and
+   signing secret, Black Duck / Jira tokens per tenant). Then list them per agent in `agentOverrides`, for
+   example `{ orchestrator: { keyVaultReferences: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ] } }`, and
    redeploy. A Container App fails to start if a referenced secret does not exist yet, which is why this is a
    second step.
 3. **Images:** the first deployment uses a public placeholder image (`usePlaceholderImages = true`) because the
-   registry is empty. Push `secagent-<app>` images, set `usePlaceholderImages = false` (better: `imageOverrides`
-   with digests) and redeploy.
-4. **Webhook:** point the SARIF / GitHub webhook at the `intakeUrl` output and fill `intakeAllowedSourceRanges`
+   registry is empty. Push `<workload>-<agent>` images, set `usePlaceholderImages = false` (better: pin digests
+   with `agentOverrides.<agent>.image`) and redeploy.
+4. **Webhook:** point the SARIF / GitHub webhook at the intake URL (`agentUrls` output) and fill
+   `agentOverrides.intake.allowedSourceRanges`
    (for GitHub, the `hooks` ranges from `https://api.github.com/meta`).
 5. **Evidence lock:** the evidence immutability policy is created unlocked so mistakes can be fixed. Locking
    it is irreversible and is a separate, deliberate operator step once the retention period is agreed.
@@ -349,7 +390,8 @@ moves the bill, roughly in order of likely impact:
 - **Model deployments** in the parameter files (`gpt-4.1-mini`, `gpt-4.1`, version `2025-04-14`, 10k TPM) are
   illustrative placeholders: confirm models, versions and quota for UK South.
 - **Agent API / dashboard** is internal by default because the POC dashboard has no login. Exposing it needs an
-  auth layer (Container Apps authentication with Entra ID, or APIM) and the IP allow-list parameter.
+  auth layer (Container Apps authentication with Entra ID, or APIM) plus
+  `agentOverrides['agent-api'] = { ingress: 'external', allowedSourceRanges: [...] }`.
 - **Application Insights connection string** is passed as a plain environment variable (Microsoft does not
   treat it as a secret). Switching to Entra-authenticated ingestion is an option.
 - **Key Vault names** are globally unique and soft-deleted vaults keep their name for the retention period;

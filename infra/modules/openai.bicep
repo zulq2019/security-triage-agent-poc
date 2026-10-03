@@ -1,6 +1,7 @@
 // openai.bicep - OPTIONAL Azure OpenAI account and model deployments (SDD 12). Local auth (API keys) is disabled:
 // apps call it with their managed identity ("Cognitive Services OpenAI User"). In the target, calls go through the
 // APIM AI gateway (not part of this POC infra; see docs/infra.md open items).
+import { modelDeployment } from '../types.bicep'
 
 @description('Region for the Azure OpenAI account. Defaults to the main region (UK South); model availability and quota differ per region [ask the Azure team].')
 param location string
@@ -9,7 +10,7 @@ param location string
 param name string
 
 @description('Model deployments: [ { name, model, version, skuName, capacity } ]. skuName Standard keeps processing in the region; GlobalStandard / DataZoneStandard may process elsewhere. capacity is in thousands of tokens per minute and must fit the subscription quota.')
-param deployments object[]
+param deployments modelDeployment[]
 
 @description('Disable public network access (use with a private endpoint).')
 param disablePublicNetworkAccess bool

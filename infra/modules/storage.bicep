@@ -1,6 +1,7 @@
 // storage.bicep - Blob storage for raw scanner output / SARIF (raw), write-once evidence (evidence), context packs
 // (context) and exports. Entra ID only (shared keys off), no public blobs, time-based immutability on evidence
-// containers (SDD 11.4, 13.3). In the Wipro-hosted model each tenant gets its own raw / evidence / context containers.
+// containers (SDD 11.4, 13.3). Which containers exist (per tenant or not) is decided by the caller.
+import { containerSpec } from '../types.bicep'
 
 @description('Azure region.')
 param location string
@@ -13,11 +14,8 @@ param name string
 @description('Redundancy SKU, for example Standard_LRS (dev) or Standard_ZRS.')
 param skuName string
 
-@description('All container names to create.')
-param containerNames string[]
-
-@description('Containers that get a time-based immutability (WORM) policy.')
-param immutableContainerNames string[]
+@description('Containers to create; immutable ones get a time-based WORM policy.')
+param containers containerSpec[]
 
 @description('Retention in days for the evidence immutability policy [to agree]. The policy is created UNLOCKED; locking it is a separate, irreversible operator step.')
 @minValue(1)
@@ -75,17 +73,17 @@ resource blob 'Microsoft.Storage/storageAccounts/blobServices@2025-06-01' = {
   }
 }
 
-resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-06-01' = [
-  for c in containerNames: {
+resource blobContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-06-01' = [
+  for c in containers: {
     parent: blob
-    name: c
+    name: c.name
     properties: { publicAccess: 'None' }
   }
 ]
 
 resource worm 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2025-06-01' = [
-  for (c, i) in containerNames: if (contains(immutableContainerNames, c)) {
-    parent: containers[i]
+  for (c, i) in containers: if (c.immutable) {
+    parent: blobContainers[i]
     name: 'default'
     properties: {
       immutabilityPeriodSinceCreationInDays: evidenceRetentionDays
@@ -109,3 +107,9 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 output id string = st.id
 output name string = st.name
 output blobEndpoint string = st.properties.primaryEndpoints.blob
+@description('Container resource ids by container name.')
+output containerIds object = toObject(
+  range(0, length(containers)),
+  i => containers[i].name,
+  i => resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', st.name, blob.name, containers[i].name)
+)

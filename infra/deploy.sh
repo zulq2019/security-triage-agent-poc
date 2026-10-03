@@ -95,7 +95,7 @@ PY
 SQL_FQDN=$(python3 -c "import json;print(json.load(open('out/${NAME}.outputs.json'))['sqlServerFqdn']['value'])")
 SQL_DB=$(python3 -c "import json;print(json.load(open('out/${NAME}.outputs.json'))['sqlDatabase']['value'])")
 KV_URI=$(python3 -c "import json;print(json.load(open('out/${NAME}.outputs.json'))['keyVaultUri']['value'])")
-INTAKE=$(python3 -c "import json;print(json.load(open('out/${NAME}.outputs.json'))['intakeUrl']['value'])")
+INTAKE=$(python3 -c "import json;print(next((u['url'] for u in json.load(open('out/${NAME}.outputs.json'))['agentUrls']['value'] if u['agent']=='intake'),''))")
 
 cat <<NEXT
 
@@ -108,8 +108,8 @@ Next steps (manual, see docs/infra.md "After the first deployment"):
        sqlcmd -S ${SQL_FQDN} -d ${SQL_DB} -G -i out/${NAME}.sql-grants.sql
   2. Secrets - set values in ${KV_URI} (never in git), e.g.:
        az keyvault secret set --vault-name <vault> --name secagent-hmac-key --value "\$(openssl rand -base64 48)"
-     then reference them per app with the appKeyVaultReferences parameter and redeploy.
-  3. Images - push secagent-<app> images to the registry, set usePlaceholderImages = false (or imageOverrides
-     with digests) and run this script again.
+     then reference them per agent with agentOverrides.<agent>.keyVaultReferences and redeploy.
+  3. Images - push <workload>-<agent> images to the registry, set usePlaceholderImages = false (pin digests with
+     agentOverrides.<agent>.image) and run this script again.
   4. Webhook - point the GitHub / SARIF webhook at ${INTAKE} (signature secret in Key Vault).
 NEXT

@@ -27,7 +27,6 @@ param containerAppsSubnetPrefix = '10.40.0.0/23'
 param privateEndpointSubnetPrefix = '10.40.2.0/24'
 param internalEnvironment = false // intake must be reachable by GitHub; set true when a front door / WAF is in front
 param zoneRedundant = true // [to confirm, NFR-08]
-param intakeAllowedSourceRanges = [] // fill with GitHub "hooks" CIDRs from https://api.github.com/meta [to confirm]
 
 param serviceBusSku = 'Premium'
 param serviceBusMessagingUnits = 1
@@ -56,7 +55,16 @@ param openAiDeployments = [
 
 param createContainerRegistry = true
 param containerRegistrySku = 'Premium' // private endpoint
-param usePlaceholderImages = true // set false once CI pushes images; prefer imageOverrides with digests
-param agentApiIngress = 'internal'
+param usePlaceholderImages = true // set false once CI pushes images; pin digests with agentOverrides.<agent>.image
+// Per-agent settings for this environment (agents themselves come from infra/agents.bicep).
+param agentOverrides = {
+  intake: {
+    allowedSourceRanges: [] // GitHub "hooks" CIDRs from https://api.github.com/meta [to confirm]
+    // keyVaultReferences: [ { envName: 'SECAGENT_WEBHOOK_SECRET', secretName: 'github-webhook-secret' } ]
+  }
+  orchestrator: {
+    // keyVaultReferences: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ]
+  }
+}
 param alwaysOnMinReplicas = 1
 param workerMaxReplicas = 10

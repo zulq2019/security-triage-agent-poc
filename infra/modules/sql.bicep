@@ -2,6 +2,7 @@
 // one database, auditing to Log Analytics (SDD 9, 13).
 // Database users for the app identities cannot be created by ARM: run infra/sql/grant-managed-identities.sql
 // as the Entra admin after deployment (deploy.sh prints the command).
+import { sqlEntraAdmin, sqlSku } from '../types.bicep'
 
 @description('Azure region.')
 param location string
@@ -13,10 +14,10 @@ param serverName string
 param databaseName string
 
 @description('Microsoft Entra admin of the server: a GROUP is recommended. { login: display name, objectId, principalType: Group | User | Application }.')
-param entraAdmin object
+param entraAdmin sqlEntraAdmin
 
 @description('Database SKU, for example { name: GP_S_Gen5, tier: GeneralPurpose, family: Gen5, capacity: 2 } (serverless) or { name: GP_Gen5, tier: GeneralPurpose, family: Gen5, capacity: 2 }.')
-param databaseSku object
+param databaseSku sqlSku
 
 @description('Serverless only: minutes of inactivity before auto-pause (-1 = never). Ignored for provisioned SKUs.')
 param autoPauseDelayMinutes int

@@ -26,7 +26,6 @@ param privateEndpointSubnetPrefix = '10.50.2.0/24'
 param dnsServers = [] // customer hub DNS resolver, if private DNS is centralised [to confirm]
 param internalEnvironment = false
 param zoneRedundant = true
-param intakeAllowedSourceRanges = []
 
 param serviceBusSku = 'Premium'
 param sqlDatabaseSku = { name: 'GP_Gen5', tier: 'GeneralPurpose', family: 'Gen5', capacity: 2 }
@@ -51,6 +50,15 @@ param openAiDeployments = [
 param createContainerRegistry = true
 param containerRegistrySku = 'Premium'
 param usePlaceholderImages = true
-param agentApiIngress = 'internal'
+param agentOverrides = {
+  intake: { allowedSourceRanges: [] } // the customer's GitHub / CI egress ranges [to confirm]
+}
+
+// Customer extensions (SDD 20): extra agents, for example an in-house fixer on its own queue. Because the
+// orchestrator is a dispatcher, it is granted Send on the new queue automatically. Example:
+// param additionalAgents = [
+//   { name: 'fixer-iac', description: 'Terraform / Bicep fixer', size: 'heavy', consumes: ['fix-iac'],
+//     sends: ['results'], blobRead: ['raw'], blobWrite: ['context'], model: true, sql: 'inserter' }
+// ]
 param alwaysOnMinReplicas = 1
 param workerMaxReplicas = 5

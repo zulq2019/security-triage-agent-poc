@@ -36,10 +36,15 @@ var zoneServiceBus = 'privatelink.servicebus.windows.net'
 var zoneOpenAi = 'privatelink.openai.azure.com'
 var zoneAcr = 'privatelink${environment().suffixes.acrLoginServer}'
 
-var zoneNames = concat(
-  [zoneBlob, zoneKeyVault, zoneSql, zoneServiceBus],
-  includeOpenAiZone ? [zoneOpenAi] : [],
-  includeAcrZone ? [zoneAcr] : []
+var zoneSpecs = concat(
+  [
+    { key: 'blob', name: zoneBlob }
+    { key: 'vault', name: zoneKeyVault }
+    { key: 'sql', name: zoneSql }
+    { key: 'servicebus', name: zoneServiceBus }
+  ],
+  includeOpenAiZone ? [{ key: 'openai', name: zoneOpenAi }] : [],
+  includeAcrZone ? [{ key: 'acr', name: zoneAcr }] : []
 )
 
 resource nsgAca 'Microsoft.Network/networkSecurityGroups@2025-05-01' = {
@@ -124,15 +129,15 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
 }
 
 resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [
-  for z in zoneNames: {
-    name: z
+  for z in zoneSpecs: {
+    name: z.name
     location: 'global'
     tags: tags
   }
 ]
 
 resource zoneLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = [
-  for (z, i) in zoneNames: {
+  for (z, i) in zoneSpecs: {
     parent: zones[i]
     name: 'link-${vnetName}'
     location: 'global'
@@ -148,12 +153,9 @@ output vnetId string = vnet.id
 output containerAppsSubnetId string = vnet.properties.subnets[0].id
 output privateEndpointSubnetId string = vnet.properties.subnets[1].id
 
-@description('Private DNS zone ids by service.')
-output dnsZoneIds object = {
-  blob: resourceId('Microsoft.Network/privateDnsZones', zoneBlob)
-  vault: resourceId('Microsoft.Network/privateDnsZones', zoneKeyVault)
-  sql: resourceId('Microsoft.Network/privateDnsZones', zoneSql)
-  servicebus: resourceId('Microsoft.Network/privateDnsZones', zoneServiceBus)
-  openai: includeOpenAiZone ? resourceId('Microsoft.Network/privateDnsZones', zoneOpenAi) : ''
-  acr: includeAcrZone ? resourceId('Microsoft.Network/privateDnsZones', zoneAcr) : ''
-}
+@description('Private DNS zone ids by service key: blob, vault, sql, servicebus (+ openai, acr when included).')
+output dnsZoneIds object = toObject(
+  range(0, length(zoneSpecs)),
+  i => zoneSpecs[i].key,
+  i => resourceId('Microsoft.Network/privateDnsZones', zoneSpecs[i].name)
+)

@@ -1,5 +1,6 @@
 // servicebus.bicep - Service Bus namespace (Entra ID only, no SAS), one work queue per kind of work, the run-events
 // topic and its subscriptions (SDD 7). Queue settings follow SDD 7.4; values marked [to agree] there are parameters.
+import { queueSpec } from '../types.bicep'
 
 @description('Azure region.')
 param location string
@@ -15,8 +16,8 @@ param sku string
 @allowed([1, 2, 4, 8, 16])
 param premiumMessagingUnits int
 
-@description('Work queues to create. Each: { name, requiresSession }.')
-param queues object[]
+@description('Work queues to create.')
+param queues queueSpec[]
 
 @description('Topic for run progress events (published once, fanned out to subscriptions).')
 param topicName string
@@ -157,5 +158,17 @@ output id string = sb.id
 output name string = sb.name
 @description('Fully qualified namespace for the SDK (ServiceBusClient with DefaultAzureCredential).')
 output fullyQualifiedNamespace string = split(replace(sb.properties.serviceBusEndpoint, 'https://', ''), ':')[0]
-output queueNames array = [for (q, i) in queues: sbQueues[i].name]
-output subscriptionNames array = [for (s, i) in topicSubscriptions: subs[i].name]
+@description('Queue resource ids by queue name.')
+output queueIds object = toObject(
+  range(0, length(queues)),
+  i => queues[i].name,
+  i => resourceId('Microsoft.ServiceBus/namespaces/queues', sb.name, queues[i].name)
+)
+output topicName string = topic.name
+output topicId string = topic.id
+@description('Subscription resource ids by subscription name.')
+output subscriptionIds object = toObject(
+  range(0, length(topicSubscriptions)),
+  i => topicSubscriptions[i],
+  i => resourceId('Microsoft.ServiceBus/namespaces/topics/subscriptions', sb.name, topic.name, topicSubscriptions[i])
+)

@@ -38,9 +38,8 @@ param existingModelBaseUrl = ''
 param createContainerRegistry = true
 param containerRegistrySku = 'Basic'
 param usePlaceholderImages = true
-// The POC dashboard has no login, so keep it internal. To reach it from a laptop in dev, switch to 'external' AND set
-// agentApiAllowedSourceRanges to your office / VPN egress CIDR(s).
-param agentApiIngress = 'internal'
-param agentApiAllowedSourceRanges = []
+// Per-agent environment settings. The POC dashboard has no login, so agent-api stays internal (catalogue default).
+// To reach it from a laptop in dev: { 'agent-api': { ingress: 'external', allowedSourceRanges: ['<office/VPN CIDR>'] } }
+param agentOverrides = {}
 param alwaysOnMinReplicas = 0
 param workerMaxReplicas = 3

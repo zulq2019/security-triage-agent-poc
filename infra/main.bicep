@@ -1,11 +1,28 @@
 // main.bicep - Security Triage & Fix Agent: one environment in one resource group.
-// Composes the modules in ./modules. Same template for both deployment models (SDD 18):
+//
+// Composition root only: it owns the naming convention and wires module OUTPUTS (ids, names, endpoints) into
+// other modules. Modules never look each other up by name. Everything that differs between environments or
+// between the two deployment models (SDD 18) is a parameter, set in params/*.bicepparam:
 //   - wipro-hosted    : multi-tenant service in Wipro's subscription (params/wipro-hosted.bicepparam)
 //   - customer-hosted : single tenant in the customer's own subscription (params/customer-hosted.bicepparam)
-// Nothing secret is in this file or the parameter files: all service-to-service auth is Microsoft Entra ID with
-// user-assigned managed identities. Secret VALUES (HMAC key, GitHub App key, connector tokens) are put in Key Vault
-// by an operator after deployment. See docs/infra.md.
+// Agents come from the typed catalogue in agents.bicep (+ additionalAgents). Queues, subscriptions, identities,
+// KEDA rules, role assignments and Container Apps are all derived from that list, so a new agent needs no module
+// change. No secrets: service-to-service auth is Microsoft Entra ID with one managed identity per agent.
 targetScope = 'resourceGroup'
+
+import {
+  agentOverrideMap
+  agentSpec
+  builtInRoles
+  containerSpec
+  modelDeployment
+  modelTierNames
+  roleAssignmentSpec
+  sizingMap
+  sqlEntraAdmin as sqlEntraAdminType
+  sqlSku
+} from 'types.bicep'
+import { blobLayout, defaultAgents, runEventsTopic } from 'agents.bicep'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Core
@@ -22,11 +39,11 @@ param environmentName string
 @maxLength(8)
 param workload string = 'secagent'
 
-@description('wipro-hosted = multi-tenant service (per-tenant Key Vault and Blob containers); customer-hosted = single tenant in the customer subscription.')
+@description('Deployment model label: tags + SECAGENT_PROFILE for the apps. Behaviour is driven by the other parameters (for example tenants), not by this label.')
 @allowed(['wipro-hosted', 'customer-hosted'])
 param deploymentModel string
 
-@description('Wipro-hosted only: tenant codes (lowercase letters and digits, max 10), for example [ contoso, fabrikam ]. Each gets its own Key Vault and raw / evidence / context containers. Ignored for customer-hosted.')
+@description('Tenant codes for a multi-tenant (Wipro-hosted) deployment. Each gets its own Key Vault and per-tenant Blob containers. Empty = single tenant.')
 param tenants tenantCode[] = []
 
 @minLength(2)
@@ -47,6 +64,52 @@ param dataClassification string = 'confidential'
 param extraTags object = {}
 
 // ---------------------------------------------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------------------------------------------
+@description('Extra agents for this environment / customer (same shape as agents.bicep), for example a customer-specific fixer.')
+param additionalAgents agentSpec[] = []
+
+@description('Per-agent environment settings keyed by agent name: ingress, allowedSourceRanges, minReplicas, maxReplicas, image, keyVaultReferences.')
+param agentOverrides agentOverrideMap = {}
+
+@description('CPU / memory per sizing class used by agentSpec.size.')
+param appSizing sizingMap = {
+  light: { cpu: '0.5', memory: '1Gi' }
+  heavy: { cpu: '2.0', memory: '4Gi' }
+}
+
+@description('Min replicas for always-on agents (0 in dev to save cost; 1 in prod, SDD 4.2).')
+param alwaysOnMinReplicas int = 0
+
+@description('Max replicas for always-on agents.')
+param alwaysOnMaxReplicas int = 3
+
+@description('Max replicas per queue worker.')
+param workerMaxReplicas int = 5
+
+@description('Active messages per replica for the KEDA scalers.')
+param messagesPerReplica int = 5
+
+@description('Concurrent HTTP requests per replica for agents with ingress.')
+param httpConcurrentRequests int = 20
+
+@description('Create an Azure Container Registry. False = use externalRegistryServer (grant AcrPull there).')
+param createContainerRegistry bool = true
+
+@description('ACR SKU (Premium for private endpoint).')
+@allowed(['Basic', 'Standard', 'Premium'])
+param containerRegistrySku string = 'Basic'
+
+@description('External registry login server when createContainerRegistry = false.')
+param externalRegistryServer string = ''
+
+@description('Deploy every agent with a public placeholder image (first deployment, before images exist). It listens on port 80.')
+param usePlaceholderImages bool = true
+
+@description('Image tag for <registry>/<workload>-<agent>:<tag> (per-agent digests go in agentOverrides.<agent>.image).')
+param imageTag string = 'latest'
+
+// ---------------------------------------------------------------------------------------------------------------
 // Network
 // ---------------------------------------------------------------------------------------------------------------
 @description('VNet + private endpoints + private DNS, public network access off on the data services. Off = public endpoints protected by Entra ID only (dev).')
@@ -64,14 +127,11 @@ param privateEndpointSubnetPrefix string = '10.40.2.0/24'
 @description('Custom DNS servers for the VNet (hub resolver). Empty = Azure DNS.')
 param dnsServers string[] = []
 
-@description('Internal-only Container Apps environment (needs private networking). The intake webhook then needs Front Door / Application Gateway in front of it.')
+@description('Internal-only Container Apps environment (needs private networking). External agents then need Front Door / Application Gateway in front.')
 param internalEnvironment bool = false
 
 @description('Zone-redundant Container Apps environment (needs private networking) [to confirm, NFR-08].')
 param zoneRedundant bool = false
-
-@description('CIDR allow-list on the public intake endpoint, for example the GitHub "hooks" ranges from https://api.github.com/meta. Empty = open (signature check still applies).')
-param intakeAllowedSourceRanges string[] = []
 
 // ---------------------------------------------------------------------------------------------------------------
 // Monitoring
@@ -96,18 +156,10 @@ param serviceBusSku string = 'Standard'
 @allowed([1, 2, 4, 8, 16])
 param serviceBusMessagingUnits int = 1
 
-@description('Fixer types. One queue fix-<type> and one Container App fixer-<type> each (SDD 4.2: library, secret, code, binary).')
-param fixerTypes fixerType[] = ['library', 'secret', 'code', 'binary']
-
-@minLength(2)
-@maxLength(12)
-@description('Fixer type: lowercase letters, digits and hyphens. Becomes queue fix-<type> and app ca-fixer-<type>-<env> (max 32 chars).')
-type fixerType = string
-
 @description('Queues created WITHOUT sessions (decision OD-03, for example [ triage ]). All others use SessionId = run id.')
 param sessionlessQueues string[] = []
 
-@description('Extra run-events subscriptions beyond dashboard and audit (for example notifier, a2a-status).')
+@description('Extra run-events subscriptions nobody in the agent list consumes yet (for example notifier).')
 param extraTopicSubscriptions string[] = []
 
 @description('MaxDeliveryCount before dead-lettering [to agree] (POC: 3).')
@@ -125,11 +177,11 @@ param messageTimeToLive string = 'P1D'
 // ---------------------------------------------------------------------------------------------------------------
 // Data
 // ---------------------------------------------------------------------------------------------------------------
-@description('Microsoft Entra admin for Azure SQL: { login, objectId, principalType }. Use a group. Comes from an environment variable in the .bicepparam files.')
-param sqlEntraAdmin object
+@description('Microsoft Entra admin for Azure SQL. Use a group. Comes from an environment variable in the .bicepparam files.')
+param sqlEntraAdmin sqlEntraAdminType
 
 @description('Azure SQL database SKU.')
-param sqlDatabaseSku object = { name: 'GP_S_Gen5', tier: 'GeneralPurpose', family: 'Gen5', capacity: 2 }
+param sqlDatabaseSku sqlSku = { name: 'GP_S_Gen5', tier: 'GeneralPurpose', family: 'Gen5', capacity: 2 }
 
 @description('Serverless auto-pause delay in minutes (-1 = never).')
 param sqlAutoPauseDelayMinutes int = 60
@@ -168,71 +220,18 @@ param deployOpenAi bool = false
 @description('Azure OpenAI region (UK South by default) [quota to confirm].')
 param openAiLocation string = location
 
-@description('Model deployments: [ { name, model, version, skuName, capacity } ]. First = small tier, second = strong tier.')
-param openAiDeployments object[] = []
+@description('Model deployments. First = small tier, second = strong tier.')
+param openAiDeployments modelDeployment[] = []
 
 @description('Use an existing OpenAI-compatible v1 endpoint instead (customer-owned Azure OpenAI or APIM gateway URL). Ignored when deployOpenAi = true.')
 param existingModelBaseUrl string = ''
 
 @description('Deployment / model names for the small and strong tiers when using existingModelBaseUrl.')
-param existingModelNames object = { small: '', strong: '' }
-
-// ---------------------------------------------------------------------------------------------------------------
-// Container Apps
-// ---------------------------------------------------------------------------------------------------------------
-@description('Create an Azure Container Registry. False = use externalRegistryServer (grant AcrPull to the app identities there).')
-param createContainerRegistry bool = true
-
-@description('ACR SKU (Premium for private endpoint).')
-@allowed(['Basic', 'Standard', 'Premium'])
-param containerRegistrySku string = 'Basic'
-
-@description('External registry login server when createContainerRegistry = false.')
-param externalRegistryServer string = ''
-
-@description('Deploy every app with a public placeholder image (first deployment, before images are pushed). Placeholder listens on port 80.')
-param usePlaceholderImages bool = true
-
-@description('Image tag (or use digests through imageOverrides).')
-param imageTag string = 'latest'
-
-@description('Per-app full image references, for example { triage: "<acr>/secagent-triage@sha256:..." }. Default: <registry>/secagent-<app>:<imageTag>.')
-param imageOverrides object = {}
-
-@description('Intake container port (SARIF / GitHub webhook endpoint).')
-param intakeTargetPort int = 8080
-
-@description('Agent API / dashboard container port (POC: secagent serve --port 8795).')
-param agentApiTargetPort int = 8795
-
-@description('Agent API / dashboard ingress. external needs agentApiAllowedSourceRanges and an auth layer in front (the POC dashboard has no login).')
-@allowed(['none', 'internal', 'external'])
-param agentApiIngress string = 'internal'
-
-@description('CIDR allow-list for the agent API / dashboard when its ingress is external (office / VPN egress ranges).')
-param agentApiAllowedSourceRanges string[] = []
-
-@description('Min replicas for always-on apps (intake, agent-api, orchestrator). 0 in dev to save cost; 1 in prod (SDD 4.2).')
-param alwaysOnMinReplicas int = 0
-
-@description('Max replicas per queue worker.')
-param workerMaxReplicas int = 5
-
-@description('Active messages per replica for the KEDA scalers.')
-param messagesPerReplica int = 5
-
-@description('CPU / memory per app class: { light: { cpu, memory }, heavy: { cpu, memory } }.')
-param appSizing object = {
-  light: { cpu: '0.5', memory: '1Gi' }
-  heavy: { cpu: '2.0', memory: '4Gi' }
-}
-
-@description('Key Vault references per app: { <app>: [ { envName, secretName } ] } (platform vault). The secret must exist before you set this.')
-param appKeyVaultReferences object = {}
+param existingModelNames modelTierNames = { small: '', strong: '' }
 
 // ===============================================================================================================
 // Naming convention: <type>-<workload>-<env>-<region>[-<unique>], with <unique> only where the name is global.
-// Per-app resources: ca-<app>-<env>, id-<app>-<env>. Storage / ACR: no hyphens.
+// Per-agent resources: ca-<agent>-<env>, id-<agent>-<env>. Storage / ACR: no hyphens.
 // ===============================================================================================================
 var envCode = { dev: 'dev', test: 'tst', preprod: 'ppd', prod: 'prd' }[environmentName]
 var regionCode = {
@@ -259,10 +258,6 @@ var names = {
   registry: 'cr${workloadAlnum}${envCode}${unique}'
 }
 
-var isMultiTenant = deploymentModel == 'wipro-hosted' && !empty(tenants)
-var tenantList = isMultiTenant ? tenants : []
-var tenantKeyVaultNames = [for t in tenantList: 'kv-${t}-${envCode}-${unique}']
-
 var tags = union(
   {
     workload: workload
@@ -277,126 +272,59 @@ var tags = union(
   extraTags
 )
 
-// Blob containers (SDD 11.4): raw scanner output and SARIF, write-once evidence, context packs, exports.
-var containerSuffixes = isMultiTenant ? map(tenantList, t => '-${t}') : ['']
-var rawContainers = map(containerSuffixes, s => 'raw${s}')
-var evidenceContainers = map(containerSuffixes, s => 'evidence${s}')
-var contextContainers = map(containerSuffixes, s => 'context${s}')
-var allContainers = concat(rawContainers, evidenceContainers, contextContainers, ['exports'])
+// ---------------------------------------------------------------------------------------------------------------
+// Agents: catalogue + environment overrides, normalised so every optional field has a value.
+// ---------------------------------------------------------------------------------------------------------------
+var agents = map(concat(defaultAgents, additionalAgents), a => {
+  name: a.name
+  ingress: agentOverrides[?a.name].?ingress ?? a.?ingress ?? 'none'
+  targetPort: a.?targetPort ?? 8080
+  allowedSourceRanges: agentOverrides[?a.name].?allowedSourceRanges ?? []
+  alwaysOn: a.?alwaysOn ?? false
+  size: a.?size ?? 'light'
+  consumes: a.?consumes ?? []
+  subscribes: a.?subscribes ?? []
+  sends: a.?sends ?? []
+  publishesEvents: a.?publishesEvents ?? false
+  dispatchesWork: a.?dispatchesWork ?? false
+  blobRead: a.?blobRead ?? []
+  blobWrite: a.?blobWrite ?? []
+  keyVault: a.?keyVault ?? false
+  model: a.?model ?? false
+  sql: a.?sql ?? 'none'
+  minReplicas: agentOverrides[?a.name].?minReplicas ?? ((a.?alwaysOn ?? false) ? alwaysOnMinReplicas : 0)
+  maxReplicas: agentOverrides[?a.name].?maxReplicas ?? ((a.?alwaysOn ?? false) ? alwaysOnMaxReplicas : workerMaxReplicas)
+  image: agentOverrides[?a.name].?image ?? ''
+  keyVaultReferences: agentOverrides[?a.name].?keyVaultReferences ?? []
+})
 
-// Service Bus (SDD 7.2). Queue names use '-' (fix-library); the SDD draws them as fix.library.
-var fixQueues = map(fixerTypes, t => 'fix-${t}')
-var workQueueNames = concat(['runs', 'scan', 'triage'], fixQueues, ['verify', 'results'])
-var queues = map(workQueueNames, q => { name: q, requiresSession: !contains(sessionlessQueues, q) })
-var topicName = 'run-events'
-var topicSubscriptions = union(['dashboard', 'audit'], extraTopicSubscriptions)
+// Service Bus entities are derived from the agents (SDD 7.2). A dispatcher may send to every queue that a
+// non-dispatcher consumes, so adding a worker agent with a new queue needs no other change.
+var dispatchQueues = flatten(map(filter(agents, a => !a.dispatchesWork), a => a.consumes))
+var agentSends = map(agents, a => union(a.sends, a.dispatchesWork ? dispatchQueues : []))
+var queueNames = union(flatten(map(agents, a => a.consumes)), flatten(agentSends))
+var queues = map(queueNames, q => { name: q, requiresSession: !contains(sessionlessQueues, q) })
+var topicSubscriptions = union(flatten(map(agents, a => a.subscribes)), extraTopicSubscriptions)
 
-// One entry per Container App = one agent / step (SDD 4.2) with its own identity and least-privilege access (SDD 13.1).
-// sqlRole: none | reader | inserter | writer (database roles created by the generated SQL grant script).
-var noAccess = {
-  ingress: 'none'
-  send: []
-  receive: []
-  sendTopic: false
-  receiveSubs: []
-  blobRead: []
-  blobWrite: []
-  keyVault: false
-  model: false
-  sqlRole: 'none'
-  size: 'light'
-  alwaysOn: false
-}
-var fixerApps = [
-  for t in fixerTypes: union(noAccess, {
-    key: 'fixer-${t}'
-    receive: ['fix-${t}']
-    send: ['results']
-    blobRead: rawContainers
-    blobWrite: contextContainers
-    model: true
-    sqlRole: 'inserter'
-    size: 'heavy'
-  })
-]
-var apps = concat(
-  [
-    union(noAccess, {
-      key: 'intake'
-      ingress: 'external'
-      send: ['runs']
-      blobWrite: rawContainers
-      keyVault: true
-      alwaysOn: true
-    })
-    union(noAccess, {
-      key: 'agent-api'
-      ingress: agentApiIngress
-      send: ['runs']
-      receiveSubs: ['dashboard']
-      blobRead: concat(rawContainers, evidenceContainers, contextContainers)
-      blobWrite: ['exports']
-      sqlRole: 'inserter'
-      alwaysOn: true
-    })
-    union(noAccess, {
-      key: 'orchestrator'
-      send: concat(['scan', 'triage'], fixQueues, ['verify'])
-      receive: ['runs', 'results']
-      sendTopic: true
-      blobRead: concat(rawContainers, evidenceContainers, contextContainers)
-      keyVault: true
-      sqlRole: 'writer'
-      alwaysOn: true
-    })
-    union(noAccess, {
-      key: 'scanner'
-      receive: ['scan']
-      send: ['results']
-      blobWrite: rawContainers
-      keyVault: true
-      size: 'heavy'
-    })
-    union(noAccess, {
-      key: 'triage'
-      receive: ['triage']
-      send: ['results']
-      blobRead: rawContainers
-      blobWrite: contextContainers
-      model: true
-      sqlRole: 'inserter'
-    })
-  ],
-  fixerApps,
-  [
-    union(noAccess, {
-      key: 'verifier'
-      receive: ['verify']
-      send: ['results']
-      blobRead: rawContainers
-      blobWrite: evidenceContainers
-      model: true
-      sqlRole: 'inserter'
-      size: 'heavy'
-    })
-    union(noAccess, {
-      key: 'audit-writer'
-      receiveSubs: ['audit']
-      blobWrite: evidenceContainers
-      sqlRole: 'inserter'
-    })
-  ]
+// Tenancy: per-tenant vaults and containers when tenants are listed.
+var tenantSuffixes = empty(tenants) ? [''] : map(tenants, t => '-${t}')
+var containers containerSpec[] = flatten(map(
+  blobLayout,
+  l =>
+    l.perTenant
+      ? map(tenantSuffixes, s => { name: '${l.purpose}${s}', purpose: l.purpose, immutable: l.immutable })
+      : [{ name: l.purpose, purpose: l.purpose, immutable: l.immutable }]
+))
+var vaultSpecs = concat(
+  [{ name: names.keyVault, tags: tags }],
+  map(tenants, t => { name: 'kv-${t}-${envCode}-${unique}', tags: union(tags, { tenant: t }) })
 )
-var appKeys = map(apps, a => a.key)
 
-var useVnet = enablePrivateNetworking
+var identityNames = map(agents, a => 'id-${a.name}-${envCode}')
 var placeholderImage = 'mcr.microsoft.com/k8se/quickstart:latest'
-var registryServer = usePlaceholderImages
-  ? ''
-  : (createContainerRegistry ? acr!.outputs.loginServer : externalRegistryServer)
 
 // ===============================================================================================================
-// Platform
+// Platform modules
 // ===============================================================================================================
 module monitoring 'modules/monitoring.bicep' = {
   name: 'monitoring'
@@ -412,7 +340,7 @@ module monitoring 'modules/monitoring.bicep' = {
   }
 }
 
-module network 'modules/network.bicep' = if (useVnet) {
+module network 'modules/network.bicep' = if (enablePrivateNetworking) {
   name: 'network'
   params: {
     location: location
@@ -431,41 +359,22 @@ module identity 'modules/identity.bicep' = {
   name: 'identity'
   params: {
     location: location
-    appKeys: appKeys
-    environmentName: envCode
+    identityNames: identityNames
     tags: tags
   }
 }
 
-module keyVault 'modules/keyvault.bicep' = {
-  name: 'keyvault-platform'
+module keyVaults 'modules/keyvault.bicep' = {
+  name: 'keyvaults'
   params: {
     location: location
-    name: names.keyVault
+    vaults: vaultSpecs
     enablePurgeProtection: keyVaultPurgeProtection
     softDeleteRetentionInDays: keyVaultSoftDeleteDays
-    vaultOperatorsGroupId: keyVaultOperatorsGroupId
     disablePublicNetworkAccess: enablePrivateNetworking
     logAnalyticsId: monitoring.outputs.logAnalyticsId
-    tags: tags
   }
 }
-
-module tenantKeyVaults 'modules/keyvault.bicep' = [
-  for (t, i) in tenantList: {
-    name: 'keyvault-tenant-${t}'
-    params: {
-      location: location
-      name: tenantKeyVaultNames[i]
-      enablePurgeProtection: keyVaultPurgeProtection
-      softDeleteRetentionInDays: keyVaultSoftDeleteDays
-      vaultOperatorsGroupId: keyVaultOperatorsGroupId
-      disablePublicNetworkAccess: enablePrivateNetworking
-      logAnalyticsId: monitoring.outputs.logAnalyticsId
-      tags: union(tags, { tenant: t })
-    }
-  }
-]
 
 module serviceBus 'modules/servicebus.bicep' = {
   name: 'servicebus'
@@ -475,7 +384,7 @@ module serviceBus 'modules/servicebus.bicep' = {
     sku: serviceBusSku
     premiumMessagingUnits: serviceBusMessagingUnits
     queues: queues
-    topicName: topicName
+    topicName: runEventsTopic
     topicSubscriptions: topicSubscriptions
     maxDeliveryCount: maxDeliveryCount
     lockDuration: lockDuration
@@ -494,8 +403,7 @@ module storage 'modules/storage.bicep' = {
     location: location
     name: names.storage
     skuName: storageSku
-    containerNames: allContainers
-    immutableContainerNames: evidenceContainers
+    containers: containers
     evidenceRetentionDays: evidenceRetentionDays
     softDeleteDays: blobSoftDeleteDays
     disablePublicNetworkAccess: enablePrivateNetworking
@@ -516,7 +424,7 @@ module sql 'modules/sql.bicep' = {
     zoneRedundant: sqlZoneRedundant
     backupStorageRedundancy: sqlBackupRedundancy
     disablePublicNetworkAccess: enablePrivateNetworking
-    allowAzureServices: !useVnet
+    allowAzureServices: !enablePrivateNetworking
     logAnalyticsId: monitoring.outputs.logAnalyticsId
     tags: tags
   }
@@ -546,142 +454,181 @@ module acr 'modules/acr.bicep' = if (createContainerRegistry) {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Private endpoints (only with private networking)
+// Private endpoints: one reusable module, one entry per target (only with private networking).
 // ---------------------------------------------------------------------------------------------------------------
-module peBlob 'modules/privateendpoint.bicep' = if (useVnet) {
-  name: 'pe-blob'
-  params: {
-    location: location
-    name: 'pe-${names.storage}-blob'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: storage.outputs.id
-    groupId: 'blob'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.blob
-    tags: tags
-  }
-}
+var privateEndpoints = !enablePrivateNetworking
+  ? []
+  : concat(
+      [
+        { name: 'pe-${names.storage}-blob', target: 'blob', groupId: 'blob', zone: 'blob', vault: -1 }
+        { name: 'pe-${names.sqlServer}', target: 'sql', groupId: 'sqlServer', zone: 'sql', vault: -1 }
+      ],
+      map(range(0, length(vaultSpecs)), i => {
+        name: 'pe-${vaultSpecs[i].name}'
+        target: 'vault'
+        groupId: 'vault'
+        zone: 'vault'
+        vault: i
+      }),
+      serviceBusSku == 'Premium'
+        ? [
+            {
+              name: 'pe-${names.serviceBus}'
+              target: 'servicebus'
+              groupId: 'namespace'
+              zone: 'servicebus'
+              vault: -1
+            }
+          ]
+        : [],
+      deployOpenAi
+        ? [{ name: 'pe-${names.openAi}', target: 'openai', groupId: 'account', zone: 'openai', vault: -1 }]
+        : [],
+      (createContainerRegistry && containerRegistrySku == 'Premium')
+        ? [{ name: 'pe-${names.registry}', target: 'acr', groupId: 'registry', zone: 'acr', vault: -1 }]
+        : []
+    )
 
-module peKeyVault 'modules/privateendpoint.bicep' = if (useVnet) {
-  name: 'pe-kv-platform'
-  params: {
-    location: location
-    name: 'pe-${names.keyVault}'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: keyVault.outputs.id
-    groupId: 'vault'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.vault
-    tags: tags
-  }
-}
-
-module peTenantKeyVaults 'modules/privateendpoint.bicep' = [
-  for (t, i) in tenantList: if (useVnet) {
-    name: 'pe-kv-tenant-${t}'
+module privateEndpointModules 'modules/privateendpoint.bicep' = [
+  for pe in privateEndpoints: {
+    name: pe.name
     params: {
       location: location
-      name: 'pe-${tenantKeyVaultNames[i]}'
+      name: pe.name
       subnetId: network!.outputs.privateEndpointSubnetId
-      targetResourceId: tenantKeyVaults[i].outputs.id
-      groupId: 'vault'
-      privateDnsZoneId: network!.outputs.dnsZoneIds.vault
-      tags: union(tags, { tenant: t })
+      targetResourceId: pe.target == 'vault'
+        ? keyVaults.outputs.vaults[pe.vault].id
+        : {
+            blob: storage.outputs.id
+            sql: sql.outputs.serverId
+            servicebus: serviceBus.outputs.id
+            openai: deployOpenAi ? openAi!.outputs.id : ''
+            acr: createContainerRegistry ? acr!.outputs.id : ''
+          }[pe.target]
+      groupId: pe.groupId
+      privateDnsZoneId: network!.outputs.dnsZoneIds[pe.zone]
+      tags: tags
     }
   }
 ]
 
-module peSql 'modules/privateendpoint.bicep' = if (useVnet) {
-  name: 'pe-sql'
-  params: {
-    location: location
-    name: 'pe-${names.sqlServer}'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: sql.outputs.serverId
-    groupId: 'sqlServer'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.sql
-    tags: tags
-  }
+// ---------------------------------------------------------------------------------------------------------------
+// Least-privilege RBAC: derived from the agent list, assigned by the reusable role-assignments module.
+// ---------------------------------------------------------------------------------------------------------------
+func assignment(principalId string, role string, scopeId string) roleAssignmentSpec => {
+  principalId: principalId
+  roleDefinitionId: role
+  scopeId: scopeId
+  principalType: 'ServicePrincipal'
 }
 
-module peServiceBus 'modules/privateendpoint.bicep' = if (useVnet && serviceBusSku == 'Premium') {
-  name: 'pe-servicebus'
-  params: {
-    location: location
-    name: 'pe-${names.serviceBus}'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: serviceBus.outputs.id
-    groupId: 'namespace'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.servicebus
-    tags: tags
-  }
-}
+var vaultIds = map(keyVaults.outputs.vaults, v => v.id)
 
-module peOpenAi 'modules/privateendpoint.bicep' = if (useVnet && deployOpenAi) {
-  name: 'pe-openai'
-  params: {
-    location: location
-    name: 'pe-${names.openAi}'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: openAi!.outputs.id
-    groupId: 'account'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.openai
-    tags: tags
-  }
-}
+var agentAssignments = flatten(map(
+  range(0, length(agents)),
+  i =>
+    concat(
+      map(
+        agentSends[i],
+        q =>
+          assignment(
+            identity.outputs.identities[i].principalId,
+            builtInRoles.serviceBusDataSender,
+            serviceBus.outputs.queueIds[q]
+          )
+      ),
+      map(
+        agents[i].consumes,
+        q =>
+          assignment(
+            identity.outputs.identities[i].principalId,
+            builtInRoles.serviceBusDataReceiver,
+            serviceBus.outputs.queueIds[q]
+          )
+      ),
+      agents[i].publishesEvents
+        ? [
+            assignment(
+              identity.outputs.identities[i].principalId,
+              builtInRoles.serviceBusDataSender,
+              serviceBus.outputs.topicId
+            )
+          ]
+        : [],
+      map(
+        agents[i].subscribes,
+        s =>
+          assignment(
+            identity.outputs.identities[i].principalId,
+            builtInRoles.serviceBusDataReceiver,
+            serviceBus.outputs.subscriptionIds[s]
+          )
+      ),
+      map(
+        filter(containers, c => contains(agents[i].blobRead, c.purpose)),
+        c =>
+          assignment(
+            identity.outputs.identities[i].principalId,
+            builtInRoles.storageBlobDataReader,
+            storage.outputs.containerIds[c.name]
+          )
+      ),
+      map(
+        filter(containers, c => contains(agents[i].blobWrite, c.purpose)),
+        c =>
+          assignment(
+            identity.outputs.identities[i].principalId,
+            builtInRoles.storageBlobDataContributor,
+            storage.outputs.containerIds[c.name]
+          )
+      ),
+      agents[i].keyVault
+        ? map(vaultIds, v => assignment(identity.outputs.identities[i].principalId, builtInRoles.vaultUser, v))
+        : [],
+      (agents[i].model && deployOpenAi)
+        ? [assignment(identity.outputs.identities[i].principalId, builtInRoles.openAiUser, openAi!.outputs.id)]
+        : [],
+      createContainerRegistry
+        ? [assignment(identity.outputs.identities[i].principalId, builtInRoles.acrPull, acr!.outputs.id)]
+        : []
+    )
+))
 
-module peAcr 'modules/privateendpoint.bicep' = if (useVnet && createContainerRegistry && containerRegistrySku == 'Premium') {
-  name: 'pe-acr'
+var operatorAssignments = empty(keyVaultOperatorsGroupId)
+  ? []
+  : map(vaultIds, v => {
+      principalId: keyVaultOperatorsGroupId
+      roleDefinitionId: builtInRoles.vaultOfficer
+      scopeId: v
+      principalType: 'Group'
+    })
+
+module rbac 'modules/role-assignments.bicep' = {
+  name: 'role-assignments'
   params: {
-    location: location
-    name: 'pe-${names.registry}'
-    subnetId: network!.outputs.privateEndpointSubnetId
-    targetResourceId: acr!.outputs.id
-    groupId: 'registry'
-    privateDnsZoneId: network!.outputs.dnsZoneIds.acr
-    tags: tags
+    assignments: concat(agentAssignments, operatorAssignments)
   }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Least-privilege RBAC, one module per app identity
-// ---------------------------------------------------------------------------------------------------------------
-module rbac 'modules/rbac.bicep' = [
-  for (a, i) in apps: {
-    name: 'rbac-${a.key}'
-    params: {
-      principalId: identity.outputs.identities[i].principalId
-      serviceBusName: serviceBus.outputs.name
-      sendQueues: a.send
-      receiveQueues: a.receive
-      topicName: topicName
-      sendTopic: a.sendTopic
-      receiveSubscriptions: a.receiveSubs
-      storageAccountName: storage.outputs.name
-      blobReadContainers: a.blobRead
-      blobWriteContainers: a.blobWrite
-      keyVaultNames: a.keyVault ? concat([keyVault.outputs.name], tenantKeyVaultNames) : []
-      openAiAccountName: (a.model && deployOpenAi) ? openAi!.outputs.name : ''
-      containerRegistryName: createContainerRegistry ? acr!.outputs.name : ''
-    }
-    dependsOn: [tenantKeyVaults]
-  }
-]
-
-// ---------------------------------------------------------------------------------------------------------------
-// Container Apps environment + one app per agent / step
+// Container Apps environment + one generic Container App per agent
 // ---------------------------------------------------------------------------------------------------------------
 module containerAppsEnv 'modules/containerapps-env.bicep' = {
   name: 'containerapps-env'
   params: {
     location: location
     name: names.containerAppsEnv
-    infrastructureSubnetId: useVnet ? network!.outputs.containerAppsSubnetId : ''
-    internal: useVnet && internalEnvironment
-    zoneRedundant: useVnet && zoneRedundant
+    infrastructureSubnetId: enablePrivateNetworking ? network!.outputs.containerAppsSubnetId : ''
+    internal: enablePrivateNetworking && internalEnvironment
+    zoneRedundant: enablePrivateNetworking && zoneRedundant
     logAnalyticsId: monitoring.outputs.logAnalyticsId
     tags: tags
   }
 }
 
+var registryServer = usePlaceholderImages
+  ? ''
+  : (createContainerRegistry ? acr!.outputs.loginServer : externalRegistryServer)
 var modelBaseUrl = deployOpenAi ? openAi!.outputs.v1BaseUrl : existingModelBaseUrl
 var smallModel = deployOpenAi
   ? (length(openAiDeployments) > 0 ? openAiDeployments[0].name : '')
@@ -689,53 +636,55 @@ var smallModel = deployOpenAi
 var strongModel = deployOpenAi
   ? (length(openAiDeployments) > 1 ? openAiDeployments[1].name : smallModel)
   : existingModelNames.strong
+var platformVault = keyVaults.outputs.vaults[0]
 
 module containerApps 'modules/containerapp.bicep' = [
-  for (a, i) in apps: {
-    name: 'ca-${a.key}'
+  for (a, i) in agents: {
+    name: 'ca-${a.name}'
     params: {
-      name: 'ca-${a.key}-${envCode}'
+      name: 'ca-${a.name}-${envCode}'
       location: location
       environmentId: containerAppsEnv.outputs.id
       identityId: identity.outputs.identities[i].id
       identityClientId: identity.outputs.identities[i].clientId
       image: usePlaceholderImages
         ? placeholderImage
-        : (imageOverrides[?a.key] ?? '${registryServer}/${workload}-${a.key}:${imageTag}')
+        : (empty(a.image) ? '${registryServer}/${workload}-${a.name}:${imageTag}' : a.image)
       registryServer: registryServer
-      ingress: a.ingress
-      targetPort: usePlaceholderImages ? 80 : (a.key == 'intake' ? intakeTargetPort : agentApiTargetPort)
-      allowedSourceIpRanges: a.key == 'intake'
-        ? intakeAllowedSourceRanges
-        : (a.key == 'agent-api' ? agentApiAllowedSourceRanges : [])
-      cpu: appSizing[a.size].cpu
-      memory: appSizing[a.size].memory
-      minReplicas: a.alwaysOn ? alwaysOnMinReplicas : 0
-      maxReplicas: a.alwaysOn ? max(alwaysOnMinReplicas, 3) : workerMaxReplicas
+      ingress: {
+        mode: a.ingress
+        targetPort: usePlaceholderImages ? 80 : a.targetPort
+        allowedSourceRanges: a.allowedSourceRanges
+      }
+      resources: appSizing[a.size]
+      scale: {
+        minReplicas: a.minReplicas
+        maxReplicas: a.maxReplicas
+        messagesPerReplica: messagesPerReplica
+        httpConcurrentRequests: httpConcurrentRequests
+      }
       serviceBusNamespace: serviceBus.outputs.name
-      serviceBusScaleRules: concat(
-        map(a.receive, q => { queueName: q }),
-        map(a.receiveSubs, s => { topicName: topicName, subscriptionName: s })
+      scaleRules: concat(
+        map(a.consumes, q => { queueName: q }),
+        map(a.subscribes, s => { topicName: serviceBus.outputs.topicName, subscriptionName: s })
       )
-      messageCountPerReplica: messagesPerReplica
-      httpConcurrentRequests: 20
       env: concat(
         [
           { name: 'SECAGENT_PROFILE', value: deploymentModel }
           { name: 'SECAGENT_ENVIRONMENT', value: environmentName }
-          { name: 'SECAGENT_AGENT', value: a.key }
+          { name: 'SECAGENT_AGENT', value: a.name }
           { name: 'SECAGENT_QUEUE', value: 'servicebus' }
           { name: 'SECAGENT_SERVICEBUS_NAMESPACE', value: serviceBus.outputs.fullyQualifiedNamespace }
-          { name: 'SECAGENT_RUN_EVENTS_TOPIC', value: topicName }
+          { name: 'SECAGENT_RUN_EVENTS_TOPIC', value: serviceBus.outputs.topicName }
           { name: 'SECAGENT_BLOB_ENDPOINT', value: storage.outputs.blobEndpoint }
-          { name: 'SECAGENT_KEYVAULT_URI', value: keyVault.outputs.uri }
+          { name: 'SECAGENT_KEYVAULT_URI', value: platformVault.uri }
           { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: monitoring.outputs.appInsightsConnectionString }
         ],
-        a.sqlRole == 'none'
+        a.sql == 'none'
           ? []
           : [
               {
-                // No password: Entra ID token for the app's own managed identity.
+                // No password: Entra ID token for the agent's own managed identity.
                 name: 'SECAGENT_SQL'
                 value: 'Server=tcp:${sql.outputs.serverFqdn},1433;Database=${sql.outputs.databaseName};Authentication=Active Directory Managed Identity;User Id=${identity.outputs.identities[i].clientId};Encrypt=True;TrustServerCertificate=False'
               }
@@ -749,14 +698,14 @@ module containerApps 'modules/containerapp.bicep' = [
             ]
           : []
       )
-      keyVaultSecrets: map(appKeyVaultReferences[?a.key] ?? [], s => {
+      keyVaultSecrets: map(a.keyVaultReferences, s => {
         envName: s.envName
         secretName: toLower(s.secretName)
-        keyVaultSecretUri: '${keyVault.outputs.uri}secrets/${s.secretName}'
+        keyVaultSecretUri: '${platformVault.uri}secrets/${s.secretName}'
       })
-      tags: union(tags, { app: a.key })
+      tags: union(tags, { app: a.name })
     }
-    dependsOn: [rbac]
+    dependsOn: [rbac, privateEndpointModules]
   }
 ]
 
@@ -764,30 +713,37 @@ module containerApps 'modules/containerapp.bicep' = [
 // Outputs (no secrets)
 // ===============================================================================================================
 output resourceNames object = names
-output tenantKeyVaults array = tenantKeyVaultNames
+output agents array = map(agents, a => a.name)
+output keyVaults array = keyVaults.outputs.vaults
 output serviceBusNamespace string = serviceBus.outputs.fullyQualifiedNamespace
-output queues array = workQueueNames
-output topic object = { name: topicName, subscriptions: topicSubscriptions }
-output blobContainers array = allContainers
-output keyVaultUri string = keyVault.outputs.uri
+output queues array = queueNames
+output topic object = { name: serviceBus.outputs.topicName, subscriptions: topicSubscriptions }
+output blobContainers array = map(containers, c => c.name)
+output keyVaultUri string = platformVault.uri
 output sqlServerFqdn string = sql.outputs.serverFqdn
 output sqlDatabase string = sql.outputs.databaseName
 output modelBaseUrl string = modelBaseUrl
 output registryLoginServer string = createContainerRegistry ? acr!.outputs.loginServer : externalRegistryServer
 output containerAppsEnvironment string = containerAppsEnv.outputs.name
+output roleAssignmentCount int = rbac.outputs.count
+output unsupportedRoleScopes array = rbac.outputs.unsupportedScopeIds
 
-@description('Public (or VNet) URL for the SARIF / GitHub webhook intake.')
-output intakeUrl string = 'https://${containerApps[0].outputs.fqdn}'
+@description('Ingress URLs by agent (agents with ingress only).')
+output agentUrls array = [
+  for (a, i) in agents: a.ingress == 'none'
+    ? { agent: a.name, url: '' }
+    : { agent: a.name, url: 'https://${containerApps[i].outputs.fqdn}' }
+]
 
-@description('Per-app identity details: needed for the SQL grant script and for granting pull on an external registry.')
-output appIdentities array = [
-  for (a, i) in apps: {
-    app: a.key
+@description('Per-agent identity details: needed for the SQL grant script and for granting pull on an external registry.')
+output agentIdentities array = [
+  for (a, i) in agents: {
+    agent: a.name
     containerApp: containerApps[i].outputs.name
     identityName: identity.outputs.identities[i].name
     clientId: identity.outputs.identities[i].clientId
     principalId: identity.outputs.identities[i].principalId
-    sqlRole: a.sqlRole
+    sqlRole: a.sql
   }
 ]
 
@@ -805,6 +761,6 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::dbo TO secagent_writer;
 func sqlUserStatement(identityName string, clientId string, role string) string =>
   'SET @sid = CONVERT(NVARCHAR(100), CONVERT(VARBINARY(16), CONVERT(UNIQUEIDENTIFIER, \'${clientId}\')), 1);\nIF DATABASE_PRINCIPAL_ID(N\'${identityName}\') IS NULL BEGIN SET @sql = N\'CREATE USER [${identityName}] WITH SID = \' + @sid + N\', TYPE = E;\'; EXEC (@sql); END\nALTER ROLE secagent_${role} ADD MEMBER [${identityName}];\n'
 
-var sqlApps = filter(range(0, length(apps)), i => apps[i].sqlRole != 'none')
+var sqlAgents = filter(range(0, length(agents)), i => agents[i].sql != 'none')
 
-output sqlGrantScript string = '${sqlRolesScript}${join(map(sqlApps, i => sqlUserStatement(identity.outputs.identities[i].name, identity.outputs.identities[i].clientId, apps[i].sqlRole)), '')}'
+output sqlGrantScript string = '${sqlRolesScript}${join(map(sqlAgents, i => sqlUserStatement(identity.outputs.identities[i].name, identity.outputs.identities[i].clientId, agents[i].sql)), '')}'

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # infra/validate.sh - local + CI validation of the Bicep (no Azure login, nothing is deployed).
-#   1. bicep build  every .bicep file (main, rg, modules)  -> ARM JSON compiles
+#   1. bicep build  every .bicep file (main, rg, types, agents, modules) -> ARM JSON compiles
 #   2. bicep lint   every .bicep and .bicepparam file      -> linter rules in infra/bicepconfig.json
 #   3. bicep build-params every params/*.bicepparam        -> parameter files match main.bicep
 # Fails on any error, and on any warning except use-recent-api-versions (which only ages with time).
@@ -35,7 +35,7 @@ run() { # run <label> <fn> <file>
   fi
 }
 
-for f in main.bicep rg.bicep modules/*.bicep; do run build build "$f"; run lint lint "$f"; done
+for f in ./*.bicep modules/*.bicep; do run build build "$f"; run lint lint "$f"; done
 for p in params/*.bicepparam; do run lint lint "$p"; run build-params build_params "$p"; done
 
 if [[ $fail -ne 0 ]]; then echo "Bicep validation FAILED"; exit 1; fi
