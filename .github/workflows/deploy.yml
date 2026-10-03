@@ -1,0 +1,157 @@
+# Manual, approval-gated deployment of the agent containers to Azure Container Apps.
+#
+# NOT RUN IN THE POC: there is no subscription. Every Azure value is a repository variable/secret placeholder.
+# Depends on PR #3 (feature/azure-bicep-infra), which adds infra/ (main.bicep, params/*.bicepparam, agents.bicep with the KEDA rules).
+# Until that is merged into this branch the preflight job stops with a clear message.
+#
+# Flow: preflight (inputs, infra present, image tag well-formed)
+#    -> deploy, inside a GitHub environment (required reviewers = the approval gate; configure in repo settings)
+#         1. azure/login via OIDC (federated credential for the environment; no client secret)
+#         2. what-if of infra/main.bicep  (always, and shown in the log before anything changes)
+#         3. what_if_only=false + mode=infra-and-images: az deployment group create with imageTag=<tag>
+#         4. az containerapp update --image for every agent in deploy/agents.json (images-only, or after infra)
+#
+# Settings per GitHub environment (placeholders):
+#   vars.AZURE_RESOURCE_GROUP, vars.ACR_NAME, vars.SECAGENT_SQL_ADMIN_OBJECT_ID, vars.SECAGENT_SQL_ADMIN_LOGIN
+#   secrets.AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID  (identity: Contributor on the resource group +
+#   User Access Administrator scoped to it only if the Bicep role assignments are deployed from CI; see docs/infra.md in PR #3)
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment (approval gate + Azure settings)
+        type: choice
+        options: [dev, test, preprod, prod]
+        default: dev
+      parameters:
+        description: Bicep parameter file under infra/params (without .bicepparam)
+        type: choice
+        options: [dev, wipro-hosted, customer-hosted]
+        default: dev
+      image_tag:
+        description: Image tag to roll out (the git SHA that build-images pushed)
+        type: string
+        required: true
+      mode:
+        description: images-only = just swap images; infra-and-images = Bicep deployment (imageTag) then images
+        type: choice
+        options: [images-only, infra-and-images]
+        default: images-only
+      what_if_only:
+        description: Show the Bicep what-if and the planned image updates, change nothing
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false      # never cancel a deployment half way
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate inputs and infra dependency
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          PARAMS: ${{ inputs.parameters }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]; then
+            echo "::error::image_tag must be a docker tag (letters, digits, . _ -), got '$IMAGE_TAG'"; exit 1
+          fi
+          if [ ! -f infra/main.bicep ] || [ ! -f "infra/params/${PARAMS}.bicepparam" ]; then
+            echo "::error::infra/main.bicep or infra/params/${PARAMS}.bicepparam not found. They come from PR #3 (feature/azure-bicep-infra); merge it first."
+            exit 1
+          fi
+          jq -e '.agents | length > 0' deploy/agents.json > /dev/null
+          {
+            echo "### Plan"
+            echo "- environment: \`${{ inputs.environment }}\`, parameters: \`$PARAMS\`, tag: \`$IMAGE_TAG\`, mode: \`${{ inputs.mode }}\`, what-if only: \`${{ inputs.what_if_only }}\`"
+            jq -r '.agents[] | "- \(.name)"' deploy/agents.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      PARAMS: ${{ inputs.parameters }}
+      MODE: ${{ inputs.mode }}
+      WHAT_IF_ONLY: ${{ inputs.what_if_only }}
+      # read by the .bicepparam files (readEnvironmentVariable)
+      SECAGENT_SQL_ADMIN_OBJECT_ID: ${{ vars.SECAGENT_SQL_ADMIN_OBJECT_ID }}
+      SECAGENT_SQL_ADMIN_LOGIN: ${{ vars.SECAGENT_SQL_ADMIN_LOGIN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check environment settings
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in RG ACR_NAME; do [ -n "${!v}" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then echo "::error::set the environment variables for:$missing"; exit 1; fi
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Images exist in ACR
+        run: |
+          set -euo pipefail
+          prefix="$(jq -r '.imageRepositoryPrefix' deploy/agents.json)"
+          for agent in $(jq -r '.agents[].name' deploy/agents.json); do
+            az acr manifest show-metadata --registry "$ACR_NAME" --name "${prefix}-${agent}:${IMAGE_TAG}" -o none \
+              || { echo "::error::${prefix}-${agent}:${IMAGE_TAG} not in ${ACR_NAME}; run build-images on main first"; exit 1; }
+          done
+
+      - name: Bicep what-if (always)
+        run: |
+          set -euo pipefail
+          az deployment group what-if --resource-group "$RG" --name "secagent-${PARAMS}-${GITHUB_RUN_ID}" \
+            --parameters "infra/params/${PARAMS}.bicepparam" imageTag="$IMAGE_TAG" usePlaceholderImages=false
+
+      - name: Bicep deploy (infra-and-images)
+        if: inputs.mode == 'infra-and-images' && !inputs.what_if_only
+        run: |
+          set -euo pipefail
+          az deployment group create --resource-group "$RG" --name "secagent-${PARAMS}-${GITHUB_RUN_ID}" \
+            --parameters "infra/params/${PARAMS}.bicepparam" imageTag="$IMAGE_TAG" usePlaceholderImages=false -o none
+
+      # One loop over the catalogue: app name ca-<agent>-<envCode> (PR #3 naming), image <acr>/<prefix>-<agent>:<tag>.
+      - name: Roll out images
+        run: |
+          set -euo pipefail
+          prefix="$(jq -r '.imageRepositoryPrefix' deploy/agents.json)"
+          server="$(az acr show --name "$ACR_NAME" --query loginServer -o tsv)"
+          for agent in $(jq -r '.agents[].name' deploy/agents.json); do
+            app="$(az containerapp list --resource-group "$RG" --query "[?starts_with(name, 'ca-${agent}-')].name | [0]" -o tsv)"
+            if [ -z "$app" ]; then echo "::error::no container app ca-${agent}-* in $RG (deploy infra first)"; exit 1; fi
+            image="${server}/${prefix}-${agent}:${IMAGE_TAG}"
+            if [ "$WHAT_IF_ONLY" = "true" ]; then
+              echo "would update $app -> $image"
+            else
+              az containerapp update --resource-group "$RG" --name "$app" --image "$image" -o none
+              echo "updated $app -> $image"
+            fi
+            echo "- $app -> \`$image\`" >> "$GITHUB_STEP_SUMMARY"
+          done

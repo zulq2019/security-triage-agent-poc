@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Per-agent host building blocks (docs/containers.md): agent catalogue (deploy/agents.json), role + transport selection by
+       configuration, queue consumer with graceful drain, health/readiness, OpenTelemetry. Depends on the domain model (SecAgent.Core) only:
+       no pipeline, intake or cloud types. Roles live in the host (src/SecAgent.Worker); cloud transports in SecAgent.Hosting.Azure. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../SecAgent.Core/SecAgent.Core.csproj" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.19.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SecAgent.Tests" />
+  </ItemGroup>
+</Project>

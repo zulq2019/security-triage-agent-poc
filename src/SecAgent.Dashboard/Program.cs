@@ -4,6 +4,7 @@ using OpenTelemetry;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using SecAgent.Agents;
+using SecAgent.Agents.Hosting;
 using SecAgent.Agents.Workflow;
 using SecAgent.Core;
 using Microsoft.Extensions.Options;
@@ -20,7 +21,8 @@ using SecAgent.Intake.Http;
 // ---------------------------------------------------------------------------------------------------------------
 LocalEnv.Load();
 var repoRoot = LocalEnv.FindRepoRoot();
-var dataRoot = Path.Combine(repoRoot, ".data");
+// Containers (docs/containers.md): the image's root file system is read-only, so state goes to a mounted volume (SECAGENT_DATA_ROOT=/data).
+var dataRoot = Environment.GetEnvironmentVariable("SECAGENT_DATA_ROOT") is { Length: > 0 } dr ? dr : Path.Combine(repoRoot, ".data");
 Directory.CreateDirectory(dataRoot);
 var sql = Environment.GetEnvironmentVariable("SECAGENT_SQL") ?? throw new InvalidOperationException("SECAGENT_SQL not set (see ~/.secagent/secagent.env)");
 var cmd = args.FirstOrDefault() ?? "serve";
@@ -118,6 +120,7 @@ builder.Configuration.AddSecAgentConfiguration(repoRoot, dataRoot);
 builder.Logging.AddFilter("SecAgent.Intake", LogLevel.Information);
 builder.Services.AddSecAgentPipeline(repoRoot, dataRoot, sql);
 builder.Services.AddSecAgentIntake(builder.Configuration);
+builder.Services.AddHealthChecks();   // /healthz + /readyz for container probes (agent-api role, docs/containers.md)
 var app = builder.Build();
 var svc = app.Services.GetRequiredService<AgentServices>();
 var runner = app.Services.GetRequiredService<RunService>();
@@ -125,6 +128,8 @@ var json = new JsonSerializerOptions(Schema.Json);
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.MapSecAgentIntake();
+app.MapHealthChecks("/healthz");
+app.MapHealthChecks("/readyz");
 
 app.MapPost("/api/runs", async (StartRun req) =>
 {
@@ -212,7 +217,9 @@ var intakeOpts = app.Services.GetRequiredService<IOptions<IntakeOptions>>().Valu
 var intakeSecret = app.Services.GetRequiredService<IIntakeSecretProvider>().GetSecret() != null;
 Console.WriteLine($"Intake: POST /api/intake/{{sarif|blackduck-rapid}} {(intakeOpts.Enabled ? intakeSecret ? "enabled" : $"refusing (set {intakeOpts.HmacSecretEnv})" : "disabled")}" +
     (intakeOpts.DropWatcherEnabled ? $" · drop folder {intakeOpts.DropFolder}" : ""));
-app.Run($"http://127.0.0.1:{port}");
+// Loopback by default (the POC dashboard has no login). The container image sets SECAGENT_BIND_ADDRESS=0.0.0.0; ingress stays internal (infra).
+var bind = Environment.GetEnvironmentVariable("SECAGENT_BIND_ADDRESS") is { Length: > 0 } ba ? ba : "127.0.0.1";
+app.Run($"http://{bind}:{port}");
 return 0;
 
 // Shared projections (API and `secagent export` use the same shapes, so the replay UI renders exactly what the live UI rendered).
@@ -321,6 +328,8 @@ static class LocalEnv
     }
     public static string FindRepoRoot()
     {
+        // Container images lay out rules/, db/ and the dashboard assets under one content root (SECAGENT_CONTENT_ROOT=/app).
+        if (Environment.GetEnvironmentVariable("SECAGENT_CONTENT_ROOT") is { Length: > 0 } cr && Directory.Exists(Path.Combine(cr, "rules"))) return cr;
         foreach (var start in new[] { Environment.CurrentDirectory, AppContext.BaseDirectory })
             for (var d = new DirectoryInfo(start); d != null; d = d.Parent)
                 if (Directory.Exists(Path.Combine(d.FullName, "rules")) && File.Exists(Path.Combine(d.FullName, "SecAgent.slnx"))) return d.FullName;

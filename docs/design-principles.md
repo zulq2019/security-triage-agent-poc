@@ -72,3 +72,21 @@ flowchart TB
 What stays static, and why: `ExternalFindingPolicy`, `FindingNormalisation`, `ParserUtil`, `IntakeSignature` and `BlackDuckSarifHints`
 are pure functions or constants with no state or I/O, so there is nothing to inject or swap. The existing pipeline (`AgentServices.Create`,
 `RunService.AnyActive`, `Hashing.Hmac`) was left as it was. The intake reaches it only through the ports above.
+
+## Worker host (one container per agent)
+
+The agent containers (`src/SecAgent.Hosting`, `src/SecAgent.Worker`, see [containers.md](containers.md)) apply the same rules:
+
+* **Role by configuration, not by branching.** `SECAGENT_AGENT` names a role. `AgentHostRegistry` looks up its `IAgentRoleModule`
+  (Strategy), and `SECAGENT_QUEUE` looks up its `IQueueTransportModule` (Abstract Factory). Each module registers only that role's
+  services. There is no `switch` on role names.
+* **One catalogue.** `deploy/agents.json` decides which queues a role consumes and which it may send to. Handlers for other queues are
+  refused at start, and sends outside the list are refused by the `CatalogScopedPublisher` decorator (the local mirror of the Service Bus
+  RBAC). The same file drives docker-compose, the image matrix and the deploy loop, and a test compares it with `infra/agents.bicep`.
+* **Ports & adapters for messaging.** `IAgentQueuePublisher`, `IAgentQueueReceiver` and `IAgentTransportHealth` are separate
+  (interface segregation). Adapters: Core's `IMessageQueue` (in-process, or `FileSystemMessageQueue` for compose) and Azure Service Bus.
+* **Operational behaviour lives in the host, not the roles.** `AgentQueueConsumer` (hosted service) owns scopes, spans, metrics,
+  retries, dead-lettering and graceful drain. `/healthz` (liveness) and `/readyz` (readiness) come from shared health checks.
+* **Options + fail fast.** `AgentHostOptions`, `ScannerRoleOptions` and `ServiceBusTransportOptions` are bound from configuration
+  (with env aliases matching the Bicep). Misconfiguration stops the host with one line and exit code 2.
+

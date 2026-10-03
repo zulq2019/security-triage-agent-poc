@@ -1,0 +1,74 @@
+{
+  "$comment": "Single source of truth for the agent containers: CI image matrix (.github/workflows/build-images.yml), worker role/queue wiring (src/SecAgent.Hosting AgentCatalog), deploy loop (deploy.yml) and docker-compose. Names, queues and subscriptions mirror infra/agents.bicep (PR #3); AgentCatalogTests checks the two agree once infra/ is on the branch. imageTarget = deploy/Dockerfile target. host = which project runs it (worker = src/SecAgent.Worker with SECAGENT_AGENT=<name>; dashboard = src/SecAgent.Dashboard, secagent serve).",
+  "version": 1,
+  "imageRepositoryPrefix": "secagent",
+  "runEventsTopic": "run-events",
+  "agents": [
+    {
+      "name": "intake",
+      "description": "SARIF / Black Duck webhook: HMAC check, raw file stored (claim check), run request enqueued.",
+      "host": "worker", "imageTarget": "runtime", "port": 8080, "ingress": "external",
+      "consumes": [], "subscribes": [], "sends": ["runs"]
+    },
+    {
+      "name": "agent-api",
+      "description": "REST API, SSE live feed and dashboard (secagent serve).",
+      "host": "dashboard", "imageTarget": "dashboard", "port": 8795, "ingress": "internal",
+      "consumes": [], "subscribes": ["dashboard"], "sends": ["runs"]
+    },
+    {
+      "name": "orchestrator",
+      "description": "Agent Framework workflow host; consumes runs and results; publishes run-events; opens PRs.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["runs", "results"], "subscribes": [], "sends": [], "dispatchesWork": true, "publishesEvents": true
+    },
+    {
+      "name": "scanner",
+      "description": "gitleaks, Trivy, Semgrep, binary check on one ref; canonical findings to blob; reply on results.",
+      "host": "worker", "imageTarget": "scanner", "port": 8080, "ingress": "none",
+      "consumes": ["scan"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "triage",
+      "description": "Triage agent (small model tier); policy layer decides.",
+      "host": "worker", "imageTarget": "runtime", "port": 8080, "ingress": "none",
+      "consumes": ["triage"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "fixer-library",
+      "description": "Library (dependency) fixer.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["fix-library"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "fixer-secret",
+      "description": "Secrets fixer.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["fix-secret"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "fixer-code",
+      "description": "Unsafe-code fixer.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["fix-code"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "fixer-binary",
+      "description": "Binary artefact / licence fixer.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["fix-binary"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "verifier",
+      "description": "Rescan, no-new-findings check, dotnet test, evidence, short summary.",
+      "host": "worker", "imageTarget": "toolchain", "port": 8080, "ingress": "none",
+      "consumes": ["verify"], "subscribes": [], "sends": ["results"]
+    },
+    {
+      "name": "audit-writer",
+      "description": "Consumes run-events (audit subscription) into the write-once evidence store.",
+      "host": "worker", "imageTarget": "runtime", "port": 8080, "ingress": "none",
+      "consumes": [], "subscribes": ["audit"], "sends": []
+    }
+  ]
+}
