@@ -58,11 +58,18 @@ jobs:
       - name: Build (warnings are errors)
         run: dotnet build SecAgent.slnx --no-restore -c Release -warnaserror
 
-      # Golden tests need the scanner toolchain and the sample repos; they run locally / nightly, not on every PR.
+      # Same code path the app uses on start (SqlStore.EnsureSchema + migrations); the database is empty, so the reset is a no-op.
+      - name: Create schema
+        run: dotnet src/SecAgent.Dashboard/bin/Release/net10.0/secagent.dll reset-db
+
+      # Excluded here, run locally: Golden tests (need the scanner toolchain, sample repos and a completed run) and the one routing
+      # test that needs a live model endpoint (Ollama) to find an available deployment.
       - name: Test
+        env:
+          TEST_FILTER: Category!=Golden&FullyQualifiedName!~Routing_escalates_high_severity_and_retries_one_tier
         run: >
           dotnet test tests/SecAgent.Tests/SecAgent.Tests.csproj --no-build -c Release
-          --filter "Category!=Golden"
+          --filter "$TEST_FILTER"
           --logger "trx;LogFileName=results.trx" --results-directory TestResults
 
       - name: Upload test results
