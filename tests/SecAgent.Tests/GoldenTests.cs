@@ -9,6 +9,8 @@ namespace SecAgent.Tests;
 /// <summary>Golden tests (PRD 4.3): check the latest completed PR-mode run in the store against rules/golden-tests/expected-outcomes.yaml.
 /// They need the local SQL Server and a completed `secagent run --pr 1` (they read real run output; nothing is mocked).</summary>
 [Trait("Category", "Golden")]
+// Shares the database collection with the pipeline-on-fakes tests: they write (and then delete) synthetic runs in the same database.
+[Collection(SecAgent.Tests.Connectors.ConnectorE2EDatabase.Collection)]
 public class GoldenTests(ITestOutputHelper output)
 {
     static readonly string[] FixedStates = [Status.FixProposed, Status.Verified, Status.Resolved];

@@ -1,0 +1,24 @@
+{
+  "case_id": "secret-appsettings-cloud-key",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "b0a07d8db38863885550d3ad74f40855b5b082418976a777d058d6453a81889b",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Cloud access key committed in application configuration: treat as leaked; remove from source and rotate.",
+        "confidence": 0.95
+      }
+    },
+    "fix": {
+      "prompt_sha256": "7ea1ac3fe5f99c02255774819e3861bcccfe44f2f550f5646093cdf90c6f33ae",
+      "response": {
+        "secret_name": "storage-access-key-id",
+        "rotation_note": "Rotate the storage access key in the cloud console; the committed value must be considered compromised.",
+        "reviewer_note": "Storage:AccessKeyId now resolves from Key Vault (kv-sample-orders-dev). Grant the app identity get access to the secret before deploying."
+      }
+    }
+  }
+}

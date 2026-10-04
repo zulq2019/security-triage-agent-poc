@@ -1,0 +1,17 @@
+# Allow-list: the image build needs only the sources, rules, schema and the agent catalogue (deploy/Dockerfile).
+*
+!Directory.Build.props
+!SecAgent.slnx
+!src/
+!rules/
+!db/
+!deploy/agents.json
+
+# ...minus build output, local settings and anything secret-shaped.
+**/bin/
+**/obj/
+**/.vs/
+**/appsettings.Local.json
+**/*.env
+**/.env*
+src/SecAgent.Dashboard/replay/

@@ -1,0 +1,195 @@
+# Local multi-container run: one container per agent, the same images CI builds (deploy/Dockerfile), wired like Azure but on one machine.
+# Synthetic data only. Nothing here is for production. See docs/containers.md.
+#
+#   cp deploy/compose.env.example .env      # set MSSQL_SA_PASSWORD and SECAGENT_HMAC_KEY (+ optional SECAGENT_INTAKE_HMAC_SECRET, GH_TOKEN)
+#   docker compose up --build -d
+#   curl -s localhost:8080/readyz           # intake;  dashboard (agent-api) on http://localhost:8795
+#
+# Differences from Azure, on purpose: queues are a shared folder (SECAGENT_QUEUE=file, FileSystemMessageQueue) instead of Service Bus,
+# SQL Server runs in a container with a local `sa` login instead of Azure SQL with Entra ID, blobs are the /data volume.
+# Hardening matches the Container Apps target: non-root, read-only root file system, no capabilities, no new privileges.
+name: secagent
+
+x-agent: &agent
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  restart: unless-stopped
+  stop_grace_period: 40s          # > Agent:DrainTimeoutSeconds (30): in-flight messages finish before SIGKILL
+  volumes:
+    - agent-data:/data
+  networks: [agents]
+
+x-agent-env: &agent-env
+  SECAGENT_QUEUE: file
+  # Key for finding fingerprints / evidence hashes (SecAgent.Core Hashing). Same value in every agent, or fingerprints differ.
+  SECAGENT_HMAC_KEY: ${SECAGENT_HMAC_KEY:?set SECAGENT_HMAC_KEY in .env (openssl rand -hex 32)}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+  SECAGENT_OTEL_CONSOLE: ${SECAGENT_OTEL_CONSOLE:-0}
+
+x-sql-env: &sql-env
+  SECAGENT_SQL: "Server=sqlserver;Database=SecAgent;User Id=sa;Password=${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env};TrustServerCertificate=True;Encrypt=True"
+
+x-build-runtime: &build-runtime
+  context: .
+  dockerfile: deploy/Dockerfile
+  target: runtime
+
+services:
+  # ------------------------------------------------------------------ platform
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+    stop_grace_period: 30s          # SQL Server needs more than the 10 s default to checkpoint and exit cleanly
+    volumes:
+      - sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b -o /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks: [agents]
+
+  db-init:                          # creates the database once; the agents create the tables (db/schema.sql) on start
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
+    depends_on:
+      sqlserver: { condition: service_healthy }
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+    entrypoint: ["/bin/bash", "-c", "/opt/mssql-tools18/bin/sqlcmd -C -S sqlserver -U sa -P \"$$MSSQL_SA_PASSWORD\" -b -Q \"IF DB_ID('SecAgent') IS NULL CREATE DATABASE SecAgent\""]
+    restart: "no"
+    networks: [agents]
+
+  # ------------------------------------------------------------------ agents (deploy/agents.json)
+  intake:
+    <<: *agent
+    build: *build-runtime
+    image: secagent-runtime:local
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: intake
+      SECAGENT_INTAKE_HMAC_SECRET: ${SECAGENT_INTAKE_HMAC_SECRET:-}   # unset = every intake request gets 503
+    ports:
+      - "127.0.0.1:${SECAGENT_INTAKE_PORT:-8080}:8080"
+
+  agent-api:
+    <<: *agent
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: dashboard
+    image: secagent-dashboard:local
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+    environment:
+      <<: [*agent-env, *sql-env]
+      Intake__Enabled: "false"      # the intake container owns /api/intake
+      SECAGENT_MODEL_BASE_URL: ${SECAGENT_MODEL_BASE_URL:-http://host.docker.internal:11434/v1}
+      GH_TOKEN: ${GH_TOKEN:-}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    ports:
+      - "127.0.0.1:${SECAGENT_DASHBOARD_PORT:-8795}:8795"
+
+  orchestrator:
+    <<: *agent
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: toolchain
+    image: secagent-toolchain:local
+    depends_on:
+      db-init: { condition: service_completed_successfully }
+    environment:
+      <<: [*agent-env, *sql-env]
+      SECAGENT_AGENT: orchestrator
+      SECAGENT_MODEL_BASE_URL: ${SECAGENT_MODEL_BASE_URL:-http://host.docker.internal:11434/v1}
+      GH_TOKEN: ${GH_TOKEN:-}       # needed only to run a real PR run against GitHub (synthetic sample repo)
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  scanner:
+    <<: *agent
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+      target: scanner
+    image: secagent-scanner:local
+    tmpfs:
+      - /tmp:size=1g                # clones + tool scratch space
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: scanner
+      # Tool caches (Trivy's ~1 GB vulnerability DB, Semgrep) on the data volume: downloaded once, kept across restarts.
+      XDG_CACHE_HOME: /data/cache/scanner
+      Agent__Scanner__LocalReposRoot: /samples
+    volumes:
+      - agent-data:/data
+      - ${SECAGENT_SAMPLES_DIR:-./.data/samples}:/samples:ro   # synthetic git repos for local scan requests
+
+  triage:
+    <<: *agent
+    image: secagent-runtime:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: triage
+
+  fixer-library:
+    <<: *agent
+    image: secagent-toolchain:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: fixer-library
+
+  fixer-secret:
+    <<: *agent
+    image: secagent-toolchain:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: fixer-secret
+
+  fixer-code:
+    <<: *agent
+    image: secagent-toolchain:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: fixer-code
+
+  fixer-binary:
+    <<: *agent
+    image: secagent-toolchain:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: fixer-binary
+
+  verifier:
+    <<: *agent
+    image: secagent-toolchain:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: verifier
+
+  audit-writer:
+    <<: *agent
+    image: secagent-runtime:local
+    pull_policy: never
+    environment:
+      <<: *agent-env
+      SECAGENT_AGENT: audit-writer
+
+volumes:
+  agent-data: {}                    # shared /data: file queues, intake ledger, blobs, checkpoints, work trees
+  sql-data: {}
+
+networks:
+  agents: {}

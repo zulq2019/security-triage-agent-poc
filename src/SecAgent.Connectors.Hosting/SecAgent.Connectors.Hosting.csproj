@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Composition of the built-in connector plug-ins for the hosts that run the pipeline: the dashboard (secagent serve / CLI) and the
+       orchestrator role of the worker host (containers). One place lists the plug-ins, so both hosts wire connectors the same way.
+       The pipeline (SecAgent.Agents) still sees only SecAgent.Connectors.Abstractions. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj" />
+  </ItemGroup>
+</Project>

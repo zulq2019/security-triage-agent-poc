@@ -1,8 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../SecAgent.Core/SecAgent.Core.csproj" />
+    <ProjectReference Include="../SecAgent.Abstractions/SecAgent.Abstractions.csproj" />
+    <!-- Connectors: contracts only. Implementations (GitHub, Jira, Black Duck, models, Teams, fakes) are wired by the host. -->
+    <ProjectReference Include="../SecAgent.Connectors.Abstractions/SecAgent.Connectors.Abstractions.csproj" />
     <PackageReference Include="Microsoft.Agents.AI" Version="1.23.0" />
-    <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.23.0" />
     <PackageReference Include="Microsoft.Agents.AI.Workflows" Version="1.23.0" />
     <PackageReference Include="OpenTelemetry" Version="1.19.1" />
   </ItemGroup>

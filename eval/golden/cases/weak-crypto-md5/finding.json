@@ -1,0 +1,37 @@
+{
+  "finding_id": "9e454df5-ca2f-4c3b-8870-570336669b5f",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.crypto.weak-hash",
+  "issue_type": "unsafe_code",
+  "title": "Weak hash algorithm in Hash()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-327"
+  ],
+  "severity_scanner": "medium",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Security/DocumentHasher.cs",
+  "line_start": 10,
+  "line_end": 10,
+  "message": "Weak hash algorithm in Hash()",
+  "attributes": {
+    "enclosing_symbol": "Hash",
+    "function_start": "8",
+    "function_end": "12"
+  },
+  "fingerprint": "ba50c2392ddb6aea3221243c6b091cb63baa212e622fe0be36e2383a66078c16",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/weak-crypto-md5/raw.json",
+  "sarif_ref": "blob://eval/weak-crypto-md5/scan.sarif",
+  "created_by_run": "d83a98d1-9e6d-472b-9951-56d19ae0212e"
+}

@@ -71,7 +71,20 @@ In the POC, the gateway writes one `ModelUsage` row per call to SQL, and the das
 | `src/SecAgent.Agents/Llm` | ContextBuilder, ModelGateway, LlmStep (pack → route → call → validate → record) |
 | `src/SecAgent.Agents/Fixers` | Library, Secrets, UnsafeCode, BinaryLicence fixers |
 | `src/SecAgent.Agents/Workflow` | Agent Framework executors, workflow graph, RunService (checkpoints, kill switch, review) |
-| `src/SecAgent.Dashboard` | `secagent` CLI + ASP.NET dashboard (SSE live feed, findings, controls) |
+| `src/SecAgent.Abstractions` | Ports (interfaces + DTOs) shared by the pipeline, the intake and its adapters; depends on Core only. See [design-principles.md](design-principles.md) |
+| `src/SecAgent.Intake.Azure` | Azure adapters for the intake ports (Blob raw store / reader, Service Bus run queue), selected by `Intake:Adapters:*` |
+| `src/SecAgent.Intake` | Push intake for external scanner results (Black Duck via GitHub Actions): `POST /api/intake/{sarif\|blackduck-rapid}` with HMAC signature, SARIF 2.1.0 + Black Duck rapid-scan parsers, idempotency ledger, raw store, run queue, Blob/drop-folder path. See [intake.md](intake.md) |
+| `src/SecAgent.Agents/Policy` | `TriagePolicy`: the deterministic triage policy layer, shared by `TriageExecutor` and the eval harness |
+| `src/SecAgent.Eval` | `secagent-eval`: golden-set evaluation harness (replay / live / record modes, outcome checkers, gates, baseline, JSON + Markdown reports). See [evaluation.md](evaluation.md) |
+| `eval/golden` | 21 synthetic golden cases (fixture, finding, expected outcome, recorded answers), scanner rules, gates, baseline |
+| `src/SecAgent.Dashboard` | `secagent` CLI + ASP.NET dashboard (SSE live feed, findings, controls); also the agent-api container (`/healthz`, `/readyz`) |
+| `src/SecAgent.Connectors.Hosting` | `AddSecAgentConnectorPlugins` (built-in connector plug-ins + the ModelProvider switch as the default model connection) and `AddSecAgentPipelineWithConnectors`: the composition shared by `secagent serve` / CLI and the orchestrator container |
+| `src/SecAgent.Agents/Hosting` | `AddSecAgentPipeline`: the pipeline composition shared by `secagent serve` and the orchestrator container |
+| `src/SecAgent.Hosting` | Per-agent host building blocks: `AgentCatalog` (reads `deploy/agents.json`), role/transport registry, queue ports, file queue, catalogue-scoped publisher, consumer with graceful drain, health/readiness, OpenTelemetry. See [containers.md](containers.md) |
+| `src/SecAgent.Hosting.Azure` | Service Bus transport for the worker host (sessions, topic subscriptions, Entra ID) |
+| `src/SecAgent.Worker` | `secagent-worker`: one host for every agent container; `SECAGENT_AGENT` picks the role module |
+| `deploy/` | `agents.json` (agent → queues, single source of truth, mirrors `infra/agents.bicep` from PR #3), `Dockerfile` (targets runtime / scanner / toolchain / dashboard), `compose.env.example`; `docker-compose.yml` at the root |
+| `.github/workflows/` | `ci.yml` (build, test, gitleaks, lint), `build-images.yml` (matrix from `agents.json`, Trivy, SBOM, ACR push via OIDC on main), `deploy.yml` (manual, approval-gated) |
 | `rules/` | Rules-as-code: policies, routing, gateway, context, rule packs, prompts, JSON schemas, golden expectations |
 | `db/schema.sql`, `db/migrations/` | Store schema and idempotent migrations (002 = ModelUsage + backfill) |
 | `tests/SecAgent.Tests` | Unit + golden tests |

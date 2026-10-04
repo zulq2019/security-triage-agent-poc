@@ -1,0 +1,5 @@
+# hadolint (Dockerfile lint, run in build-images.yml). DL3008 (pin apt package versions) is ignored on purpose: the base images are
+# pinned by digest and apt only adds git / python3 from the same Ubuntu release, where taking security updates on rebuild is wanted.
+ignored:
+  - DL3008
+failure-threshold: warning

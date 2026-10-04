@@ -1,0 +1,45 @@
+{
+  "id": "weak-random-token",
+  "title": "Password-reset token from a non-cryptographic RNG",
+  "category": "weak_crypto",
+  "description": "Reset tokens generated with System.Random (predictable). Expected: RandomNumberGenerator, same token format.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Security/ResetTokenGenerator.cs",
+      "regex": "RandomNumberGenerator\\.(GetBytes|Fill|GetHexString|GetInt32|Create)\\b"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Security/ResetTokenGenerator.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "insecure-random",
+    "file": "src/App/Security/ResetTokenGenerator.cs"
+  },
+  "notes": "A unit test cannot prove an RNG is cryptographic: the regression test only checks uniqueness and format (it also passes on the vulnerable code). The deciding checks are the rescan (target rule gone) and pattern_present."
+}

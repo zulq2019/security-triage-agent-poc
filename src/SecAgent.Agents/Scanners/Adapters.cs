@@ -7,12 +7,8 @@ namespace SecAgent.Agents.Scanners;
 
 static class Common
 {
-    public static string Sev(string? s) => (s ?? "").ToLowerInvariant() switch
-    {
-        "critical" => "critical", "high" => "high", "error" => "high", "medium" => "medium", "moderate" => "medium", "warning" => "medium",
-        "low" => "low", "note" => "low", "info" => "info", "negligible" => "info", _ => "medium",
-    };
-    public static string Rel(string p) => p.Replace('\\', '/').TrimStart('.', '/');
+    public static string Sev(string? s) => FindingNormalisation.Severity(s);
+    public static string Rel(string p) => FindingNormalisation.RepoRelativePath(p);
     public static string TempFile(string ext) => Path.Combine(Path.GetTempPath(), "secagent-" + Guid.NewGuid().ToString("N") + ext);
 }
 
@@ -88,7 +84,10 @@ public sealed class TrivyAdapter : IScannerAdapter
     {
         var bin = Proc.Which("trivy");
         var outFile = Common.TempFile(".json");
-        var dbExists = Directory.Exists(Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "", ".cache/trivy/db"));
+        // Trivy's cache follows XDG_CACHE_HOME, else ~/.cache. Check for the DB file, not just the folder: an interrupted first download
+        // leaves an empty folder, and --skip-db-update would then fail every scan ("cannot be specified on the first run").
+        var cacheHome = Environment.GetEnvironmentVariable("XDG_CACHE_HOME") is { Length: > 0 } x ? x : Path.Combine(Environment.GetEnvironmentVariable("HOME") ?? "", ".cache");
+        var dbExists = File.Exists(Path.Combine(cacheHome, "trivy", "db", "trivy.db"));
         var args = new List<string> { "fs", "--scanners", "vuln,license", "--license-full", "--format", "json", "--output", outFile, "--quiet",
             "--skip-dirs", "**/bin", "--skip-dirs", "**/obj", "--skip-dirs", ".git", "--cache-backend", "memory" };
         if (dbExists) args.Add("--skip-db-update");

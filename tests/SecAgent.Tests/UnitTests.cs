@@ -197,7 +197,9 @@ public class ContextAndRoutingTests
         Assert.All(r.Pack.Components.Where(c => !c.Required && c.SourceRef != "none"), c => Assert.False(c.Included));
     }
 
-    static ModelGateway Gateway() => new(TestEnv.Cfg, TestEnv.Store(), new KillSwitch(Path.Combine(Path.GetTempPath(), "ks-" + Guid.NewGuid()), false), new SchemaValidator(TestEnv.Cfg));
+    // The model provider is the in-memory fake connector (no catalogue → every configured deployment is a candidate): routing is deterministic.
+    static ModelGateway Gateway() => new(TestEnv.Cfg, TestEnv.Store(), new KillSwitch(Path.Combine(Path.GetTempPath(), "ks-" + Guid.NewGuid()), false),
+        new SchemaValidator(TestEnv.Cfg, new JsonSchemaCache()), ConnectorTestKit.Fakes().Ports);
     static ContextPack Pack(int tokens) => new() { RunId = Guid.Empty, TokenTotal = tokens };
 
     [Fact]

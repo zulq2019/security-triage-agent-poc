@@ -1,0 +1,23 @@
+{
+  "case_id": "nuget-vuln-upgrade",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "3a083b1592b74d43024f84e135f5adad830a60956474459bca605f35fd390262",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Direct dependency with a known advisory and a published fixed version (13.0.1); minor-version upgrade within the same major line.",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "899afaa61fac3154f2f5ade441af467c8b2b280ad577f1e3ead54ab67fdb303b",
+      "response": {
+        "breaking_change_risk": "low",
+        "reviewer_note": "Bump Newtonsoft.Json 12.0.3 → 13.0.1 (lowest fixed version). 13.0 changes the default MaxDepth to 64; the serializer only handles flat Order records. Build and tests verify."
+      }
+    }
+  }
+}

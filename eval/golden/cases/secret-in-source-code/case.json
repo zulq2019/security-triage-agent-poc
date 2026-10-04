@@ -1,0 +1,32 @@
+{
+  "id": "secret-in-source-code",
+  "title": "Cloud access key hard-coded in C# source",
+  "category": "secret_in_source",
+  "description": "A key literal in a .cs file. The secrets fixer only rewrites JSON configuration, so the agent must hand this to a human instead of editing code. The model also proposes a lower severity, which the policy must refuse (secrets are never lowered).",
+  "tags": [
+    "negative",
+    "secret",
+    "unsupported_fix"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "secrets",
+    "outcome": "needs_human",
+    "severity_effective": "high",
+    "human_tasks": [
+      "fix_failed"
+    ]
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "secret-cloud-access-key",
+    "file": "src/App/StorageClient.cs"
+  },
+  "synthetic_secrets": {
+    "CLOUD_KEY": "aws_access_key_id"
+  }
+}

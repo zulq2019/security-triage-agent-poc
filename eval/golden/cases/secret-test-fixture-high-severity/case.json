@@ -1,0 +1,30 @@
+{
+  "id": "secret-test-fixture-high-severity",
+  "title": "Test-fixture key reported at high severity",
+  "category": "secret_in_config",
+  "description": "Same test-fixture location and sandbox prefix, but the scanner rule reports it as high. The agent may only suppress low/medium findings, so its suppress proposal must become suppress_pending (AppSec sign-off).",
+  "tags": [
+    "negative",
+    "secret",
+    "test_only_fake_key",
+    "appsec_signoff"
+  ],
+  "expected": {
+    "triage": "suppress_pending",
+    "fixer": null,
+    "outcome": "suppress_pending",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "secret-payment-key",
+    "file": "tests/App.Tests/Fixtures/test-settings.json"
+  },
+  "synthetic_secrets": {
+    "TEST_KEY": "stripe_test_key"
+  }
+}
