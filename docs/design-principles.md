@@ -73,6 +73,29 @@ What stays static, and why: `ExternalFindingPolicy`, `FindingNormalisation`, `Pa
 are pure functions or constants with no state or I/O, so there is nothing to inject or swap. The existing pipeline (`AgentServices.Create`,
 `RunService.AnyActive`, `Hashing.Hmac`) was left as it was. The intake reaches it only through the ports above.
 
+## Connectors (GitHub, Jira, Black Duck, model provider, Teams)
+
+The connector layer (`src/SecAgent.Connectors*`, see [connectors.md](connectors.md)) follows the same rules: constructor injection, one
+composition root (`DashboardComposition.AddSecAgentConnectorPlugins`), the options pattern with a validator, and dependencies pointing
+inwards. `SecAgent.Connectors.Abstractions` depends on nothing; the runtime and every plug-in depend only on it (and the runtime); the
+pipeline depends only on the abstractions. Architecture tests enforce the references.
+
+| Pattern / principle | Where |
+|---|---|
+| **Ports & adapters** | Client interfaces in `SecAgent.Connectors.Abstractions`; adapters in one project per system (`.GitHub`, `.Jira`, `.BlackDuck`, `.OpenAI`, `.Teams`) plus `.Fakes`. |
+| **Interface segregation** | Each client is a union of small interfaces (`IPullRequestReader`, `IPullRequestWriter`, `IBranchPublisher`, `IIssueTransitioner`, `IVulnerabilityBacklogReader`, `IModelCompletion`, ...). |
+| **No merge by construction** | No merge/approve/protection member on any interface (reflection test); `NoMergeGuardHandler` blocks those GitHub endpoints at the HTTP layer as well. |
+| **Plug-in registry / capability descriptors** | `IConnector.Describe()` returns a `ConnectorDescriptor` (capabilities, scopes and reasons, never-granted list, setup fields); `ConnectorCatalog` lists them for the Connections page (`GET /api/connectors`). |
+| **Abstract factory by configuration** | `IConnectorClientFactory<TClient>.ForTenant(tenant)` picks the plug-in named in `Connectors:Tenants:<t>:<Kind>:Provider` and calls its `CreateClient`. |
+| **Per-tenant resolution** | `ITenantResolver` (repository → tenant) and `ITenantConnectionResolver` (tenant + kind → connection). Multi-tenant never falls back to another tenant. |
+| **Options + validation** | `ConnectorOptions` bound from `Connectors`, `ConnectorOptionsValidator` + `ValidateOnStart` (unknown provider, missing field, secret-looking setting, overlapping repositories, process-wide secrets in multi-tenant mode). |
+| **Decorator / interceptor chain** | Every client is wrapped by a per-kind decorator that runs `IConnectorCallInterceptor`s: `AuditingInterceptor` (audit events, no payloads) then `ResilienceInterceptor` (Polly retry for idempotent calls only, per-tenant circuit breaker, timeouts). |
+| **HTTP resilience** | `AddConnectorHttpClient` adds the `Microsoft.Extensions.Http.Resilience` handler (timeout, token-bucket rate limiter, retry on safe methods only, circuit breaker). |
+| **Template Method** | `ConnectorRestClient` base: base URL, auth hook, JSON, error mapping, same-host link following; Jira and Black Duck clients override the auth hook. |
+| **Injected secret provider** | `ISecretProvider` over `ISecretSource`s (`env:`, `kv:` Key Vault, `gh-cli:` local, `memory:` tests). Configuration holds references only. |
+| **Null / optional connectors** | `TryForTenant` for issue tracker, notifier and scanner source; a missing or failing optional connector never fails a run. |
+| **Fakes + contract tests** | `.Fakes` with a shared `FakeConnectorWorld` that records interactions; abstract contract test classes run against the fake and the real plug-in (behind HTTP simulators). |
+
 ## Evaluation harness (golden set)
 
 `src/SecAgent.Eval` (see [evaluation.md](evaluation.md)) follows the same rules as the intake. It uses constructor injection only, has a
