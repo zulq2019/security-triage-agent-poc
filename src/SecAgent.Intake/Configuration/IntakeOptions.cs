@@ -12,6 +12,12 @@ public sealed class IntakeOptions
     public bool Enabled { get; set; } = true;
     /// <summary>Env var holding the shared HMAC secret (same value as the GitHub secret INTAKE_HMAC_SECRET). Unset = every request gets 503.</summary>
     public string HmacSecretEnv { get; set; } = "SECAGENT_INTAKE_HMAC_SECRET";
+    /// <summary>Env var holding the admin token for reading intake records (GET /api/intake, <c>Authorization: Bearer</c>).</summary>
+    public string AdminTokenEnv { get; set; } = "SECAGENT_INTAKE_ADMIN_TOKEN";
+    /// <summary>GET /api/intake also accepts a request signed with the intake HMAC secret (scope "_list", empty body).</summary>
+    public bool ListingAcceptsHmac { get; set; } = true;
+    /// <summary>Dev only: GET /api/intake without credentials from this machine (no proxy headers). Off by default; never behind a tunnel.</summary>
+    public bool ListingAllowsLoopback { get; set; }
     /// <summary>Signed timestamp must be within this many seconds of server time (replay window; the idempotency key covers replays inside it).</summary>
     public int TimestampToleranceSeconds { get; set; } = 300;
     public long MaxBodyBytes { get; set; } = 25L * 1024 * 1024;
@@ -19,6 +25,10 @@ public sealed class IntakeOptions
     public int MaxJsonDepth { get; set; } = 64;
     /// <summary>A claimed-but-unfinished idempotency key older than this is resumed by the next delivery (crash recovery).</summary>
     public int ClaimLeaseSeconds { get; set; } = 120;
+    /// <summary>Lifetime ceiling on claim takeovers per idempotency key (failed or lease expired). When a further takeover would exceed it,
+    /// the record is marked failed for good (409, "send a new run id") instead of being reclaimed forever, e.g. by a payload that keeps
+    /// crashing the worker.</summary>
+    public int MaxClaimTakeovers { get; set; } = 5;
     /// <summary>Accepted source_scanner values (must also be in rules/schema/finding.schema.json).</summary>
     public List<string> AllowedScanners { get; set; } = ["blackduck"];
     /// <summary>Repos allowed to push (owner/name, "*" suffix wildcard: "my-org/*"). Empty = any repo.</summary>

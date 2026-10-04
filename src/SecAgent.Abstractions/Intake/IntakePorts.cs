@@ -36,11 +36,28 @@ public interface IRawFindingStore
     byte[] Get(string uri);
 }
 
-/// <summary>Idempotency ledger writes (local JSON files; a SQL table or Table Storage in the cloud). TryClaim is atomic per key.</summary>
+/// <summary>Outcome of a fenced ledger write (<see cref="IIntakeLedger.TryUpdate"/>).</summary>
+public enum LedgerWriteResult
+{
+    /// <summary>The stored record still carried the expected claim token; it was replaced.</summary>
+    Updated,
+    /// <summary>The stored record carries another claim token: another delivery took the claim over (or it was terminalized). Nothing was
+    /// written; the caller no longer owns the record and must stop without further side effects.</summary>
+    LostOwnership,
+    /// <summary>No record under that key. Nothing was written.</summary>
+    NotFound,
+}
+
+/// <summary>Idempotency ledger writes (local JSON files; a SQL table or Table Storage in the cloud). TryClaim is atomic per key.
+/// <para>Fencing: after the claim, every write is a compare-and-set on the claim token (<see cref="TryUpdate"/>), so a delivery whose
+/// claim was taken over after the lease cannot overwrite the new owner's state. There is deliberately no unconditional update.</para></summary>
 public interface IIntakeLedger
 {
     bool TryClaim(IntakeRecord record, out IntakeRecord existing);
-    void Update(IntakeRecord record);
+    /// <summary>Compare-and-set: replaces the stored record with <paramref name="record"/> only if the stored record still carries
+    /// <paramref name="expectedClaimToken"/> (an ETag / rowversion check in a cloud adapter), atomically with <see cref="TryClaim"/> and
+    /// other TryUpdate calls. A takeover passes the old token and a record with a new one; the claim holder passes its own token.</summary>
+    LedgerWriteResult TryUpdate(IntakeRecord record, string expectedClaimToken);
     IntakeRecord? Get(string key);
 }
 
@@ -48,6 +65,25 @@ public interface IIntakeLedger
 public interface IIntakeRecordQuery
 {
     IEnumerable<IntakeRecord> All();
+}
+
+/// <summary>Shared naming convention for the run queue, used by every adapter and mirrored by the infrastructure (infra/agents.bicep
+/// creates <c>runs</c> with sessions on; deploy/agents.json lists it for the intake, agent-api and orchestrator).
+/// <para>Session = the run target (repository + PR, or repository + ref), so requests for one PR are handed out in order, one at a
+/// time. The same key is used whether or not the broker enforces sessions (sessionless deployments simply ignore it).</para></summary>
+public static class RunQueueConvention
+{
+    /// <summary>Queue name for run requests, locally and in Service Bus.</summary>
+    public const string QueueName = "runs";
+    /// <summary>Service Bus limit for SessionId.</summary>
+    public const int MaxSessionIdLength = 128;
+
+    /// <summary>"owner/repo#12" for a PR, "owner/repo@refs/heads/main" for a ref; hashed when longer than the broker allows.</summary>
+    public static string SessionId(IntakeRunRequest request)
+    {
+        var key = request.PrNumber is int pr ? $"{request.Repo}#{pr}" : $"{request.Repo}@{request.Ref ?? request.HeadSha}";
+        return key.Length <= MaxSessionIdLength ? key : "sha256:" + Hashing.Sha256(key)[..32];
+    }
 }
 
 /// <summary>Producer side of the run queue: asks for a pipeline run for an accepted intake.</summary>
@@ -80,6 +116,22 @@ public sealed record IntakeAuthResult(bool Ok, string? Error = null)
 {
     public static readonly IntakeAuthResult Success = new(true);
     public static IntakeAuthResult Fail(string error) => new(false, error);
+}
+
+/// <summary>A read request on the intake's own API (GET /api/intake): the request headers and whether the caller is on this machine
+/// without a proxy in between (only used when a loopback exemption is explicitly configured).</summary>
+public sealed record IntakeReadRequest(IReadOnlyDictionary<string, string> Headers, bool IsDirectLoopback);
+
+/// <summary>Strategy: one way to authorise a read of intake records (admin token, HMAC-signed request, explicit loopback exemption).
+/// The read authoriser asks every configured credential; any grant wins.</summary>
+public interface IIntakeReadCredential
+{
+    /// <summary>Human-readable name for errors and logs, e.g. "admin token".</summary>
+    string Name { get; }
+    /// <summary>False when this credential is not set up on the server (e.g. no admin token configured); it is then ignored.</summary>
+    bool IsConfigured { get; }
+    /// <summary>Null when the request does not present this credential; otherwise the check result.</summary>
+    IntakeAuthResult? Check(IntakeReadRequest request);
 }
 
 /// <summary>Where the shared HMAC secret comes from (environment variable locally; Key Vault reference / SecretClient in Azure).</summary>

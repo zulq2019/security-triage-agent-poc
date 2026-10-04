@@ -22,6 +22,9 @@ public sealed class IntakeFromBlobHandler(IOptions<IntakeOptions> options, IInta
     public async Task<IntakeResult> HandleAsync(BlobCreatedEvent evt, CancellationToken ct)
     {
         var o = options.Value;
+        // Same switch as the webhook: nothing is read, parsed, stored or queued while intake is disabled. 503 = retryable, so the event
+        // source (Event Grid retry, the drop folder) keeps the blob for later instead of rejecting it.
+        if (!o.Enabled) return IntakeResult.Rejected(503, "intake is disabled (Intake:Enabled)");
         if (evt.ContentLength > o.MaxBodyBytes) return IntakeResult.Rejected(413, $"blob is {evt.ContentLength} bytes; the limit is {o.MaxBodyBytes}");
         var format = evt.Metadata.TryGetValue("format", out var fm) && fm.Length > 0 ? fm.ToLowerInvariant()
             : parsers.InferFormat(evt.Name) ?? o.DefaultBlobFormat;
