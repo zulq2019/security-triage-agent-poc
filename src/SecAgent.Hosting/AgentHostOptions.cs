@@ -38,6 +38,9 @@ public sealed class AgentHostOptions
     public int ReceiveWaitSeconds { get; set; } = 5;
     /// <summary>Deliveries before a message is dead-lettered (local transports; Service Bus uses the queue's MaxDeliveryCount).</summary>
     public int MaxDeliveries { get; set; } = 3;
+    /// <summary>While a handler runs, renew its message lock / lease this often (0 = never). Keep it well below the Service Bus
+    /// lockDuration (Bicep default PT5M) and the file-queue lease (5 minutes).</summary>
+    public int LockRenewalSeconds { get; set; } = 30;
 
     /// <summary>Fills derived defaults and checks what can be checked without the catalogue.</summary>
     public AgentHostOptions Resolve()
@@ -50,8 +53,8 @@ public sealed class AgentHostOptions
         if (string.IsNullOrWhiteSpace(DataRoot)) DataRoot = Path.Combine(ContentRoot, ".data");
         if (string.IsNullOrWhiteSpace(CatalogPath)) CatalogPath = Path.Combine(ContentRoot, "deploy", "agents.json");
         if (string.IsNullOrWhiteSpace(QueueRoot)) QueueRoot = Path.Combine(DataRoot, "queues");
-        if (DrainTimeoutSeconds < 0 || MaxConcurrentMessages < 1 || ReceiveWaitSeconds < 1 || MaxDeliveries < 1)
-            throw new AgentHostConfigurationException("Agent: DrainTimeoutSeconds >= 0, MaxConcurrentMessages/ReceiveWaitSeconds/MaxDeliveries >= 1");
+        if (DrainTimeoutSeconds < 0 || LockRenewalSeconds < 0 || MaxConcurrentMessages < 1 || ReceiveWaitSeconds < 1 || MaxDeliveries < 1)
+            throw new AgentHostConfigurationException("Agent: DrainTimeoutSeconds/LockRenewalSeconds >= 0, MaxConcurrentMessages/ReceiveWaitSeconds/MaxDeliveries >= 1");
         return this;
     }
 

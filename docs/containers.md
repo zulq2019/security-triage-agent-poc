@@ -157,6 +157,7 @@ What compose starts: SQL Server 2022, a one-time `db-init` that creates the data
 | `SECAGENT_SQL` | SQL connection string. Only for the agents that use SQL. |
 | `SECAGENT_HMAC_KEY` | fingerprint/evidence hashing key. Must be the same in every agent. |
 | `Agent__DrainTimeoutSeconds` | graceful-shutdown drain time (30). Keep the container stop timeout above it. |
+| `Agent__LockRenewalSeconds` | how often the consumer renews the message / session lock (or the file-queue lease) while a handler runs (30; 0 = off). Keep it well below the queue's lock duration (Bicep: 5 min) and the file-queue lease (5 min). |
 | `Agent__MaxConcurrentMessages`, `Agent__MaxDeliveries`, `Agent__ReceiveWaitSeconds` | consumer tuning |
 | `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry: traces, metrics and logs over OTLP when an endpoint is set. `SECAGENT_OTEL_CONSOLE=1` prints them. |
 
@@ -164,7 +165,20 @@ What compose starts: SQL Server 2022, a one-time `db-init` that creates the data
 
 - `/healthz` is **liveness**: the process is up. It never checks dependencies, so a slow database does not cause restart loops.
 - `/readyz` is **readiness**: the role is composed, the transport is reachable, and the consumer loop is running and not draining. It
-  returns JSON with one entry per check.
+  returns JSON with one entry per check. For Service Bus, "reachable" means a real broker round trip: the most recent receive must
+  not have failed, and a probe opens a sender link on the first entity the role sends to and peeks the first subscription (or
+  sessionless queue) it consumes. Neither sends nor consumes anything; session queues are never probed (accepting a session would
+  take it). A wrong namespace, missing RBAC or a broker outage reports not ready. Results are cached (30 s after success, 5 s after a
+  failure; 10 s timeout) so frequent probes do not load the broker.
+- **Long handlers keep their lock.** While a handler runs, the consumer renews the delivery's lock every `Agent:LockRenewalSeconds`:
+  the session lock on session queues, the message lock otherwise, and the claim's lease on the file queue. A lost lock is logged (the
+  message may be redelivered; handlers are idempotent). A failed Complete / Abandon / DeadLetter is logged and never stops the
+  receive loop; the broker redelivers the message when its lock expires.
+- **File-queue claims are unique.** Each claim gets its own file name (`<message>~<claim id>.json`), so after a lease expires and
+  another consumer re-claims the message, the first consumer's late Complete or Abandon cannot delete or duplicate the new claim.
+- **Run events are retried.** The orchestrator retries a failed publish to `run-events` with backoff (1 s doubling to 30 s), in order,
+  instead of dropping it. MessageId `run:seq` lets Service Bus duplicate detection drop a retry that already reached the broker. Events
+  still queued at shutdown are logged as undelivered (see Open items: outbox).
 - **Graceful shutdown:** on SIGTERM, readiness turns unhealthy, no new messages are taken, and in-flight messages get
   `Agent:DrainTimeoutSeconds` to finish. Anything still running after that is abandoned, so Service Bus (or the file queue) delivers it
   again. The host's shutdown timeout is the drain time plus 10 s, and compose's `stop_grace_period` is 40 s.
@@ -247,9 +261,11 @@ consumed queue or subscription). This repo does not duplicate them. Instead, `de
   hosting, queues, RBAC mirror and scaling are ready for it.
 - **agent-api** still starts runs in-process. A live SSE feed across containers needs it to read the `run-events` topic (`dashboard`
   subscription).
-- **Service Bus alignment with PR #2 / #3.** The intake's Service Bus adapter defaults to the queue `intake-runs` and sends without a
-  SessionId. The Bicep creates `runs` with sessions on. Set `Intake__Azure__RunQueueName=runs` and either add a SessionId or put `runs`
-  in `sessionlessQueues`. The local intake queue is also named `intake-runs`.
+- **Intake run queue in Azure.** Name and sessions are now aligned with PR #2 / #3 (`RunQueueConvention`: queue `runs`, session-enabled,
+  SessionId = run target; the local queue is also `runs`). Still to wire: the intake and orchestrator containers need
+  `Intake__Adapters__RunQueue=azure-servicebus` and `Intake__Azure__ServiceBusNamespace`; the Bicep does not set them yet.
+- **Run-events outbox.** Event publication retries while the process lives; events queued in memory are lost if the orchestrator
+  crashes. A durable outbox (the events are already in SQL) is the follow-up if the audit trail must survive crashes.
 - **Shared state in Azure.** Workers use the local blob store and the intake ledger is file-based. Both need Azure adapters (Blob, SQL)
   before more than one replica runs in Azure.
 - **`SECAGENT_HMAC_KEY` in Azure.** The Bicep (PR #3) does not set it yet. It needs a Key Vault secret reference on every container app.

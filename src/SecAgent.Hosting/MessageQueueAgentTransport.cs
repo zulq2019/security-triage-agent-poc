@@ -61,6 +61,8 @@ public sealed class MessageQueueAgentTransport(IMessageQueue queue, IAgentTransp
         public Task CompleteAsync(CancellationToken ct) { q.Complete(raw); return Task.CompletedTask; }
         public Task AbandonAsync(string error, CancellationToken ct) { q.Abandon(raw, error); return Task.CompletedTask; }
         public Task DeadLetterAsync(string reason, CancellationToken ct) { DeadLetter(q, raw, reason); return Task.CompletedTask; }
+        /// <summary>Queues with claims (file queue) renew the claim; the in-process queue has no lock to lose.</summary>
+        public Task<bool> RenewLockAsync(CancellationToken ct) => Task.FromResult(q is not IMessageLeaseRenewal leases || leases.RenewLease(raw));
     }
 }
 

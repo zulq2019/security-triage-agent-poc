@@ -33,6 +33,10 @@ public interface IAgentDelivery
     /// <summary>Back on the queue for redelivery; dead-lettered by the transport after its max deliveries.</summary>
     Task AbandonAsync(string error, CancellationToken ct);
     Task DeadLetterAsync(string reason, CancellationToken ct);
+    /// <summary>Extends the lock / lease while the handler is still running (Service Bus message or session lock, file-queue claim), so a
+    /// long handler is not redelivered to another consumer. False = the lock is already lost (another consumer may have the message).
+    /// Transports without locks (in-process) return true.</summary>
+    Task<bool> RenewLockAsync(CancellationToken ct);
 }
 
 /// <summary>Port: send to a queue, or publish to a topic. Roles depend on this, never on a transport.</summary>

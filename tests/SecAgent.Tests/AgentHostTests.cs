@@ -447,7 +447,7 @@ public sealed class AgentQueueConsumerTests
         }
     }
 
-    static async Task<(WebApplication App, IMessageQueue Queue, string Base)> Start(Probe probe, int drainSeconds = 5)
+    static async Task<(WebApplication App, IMessageQueue Queue, string Base)> Start(Probe probe, int drainSeconds = 5, int lockRenewalSeconds = 30)
     {
         var dir = WorkerKit.TempDir();
         var catalog = Path.Combine(dir, "agents.json");
@@ -459,6 +459,7 @@ public sealed class AgentQueueConsumerTests
         {
             ["Agent:Role"] = "probe-agent", ["Agent:ContentRoot"] = TestEnv.RepoRoot, ["Agent:DataRoot"] = dir, ["Agent:CatalogPath"] = catalog,
             ["Agent:ReceiveWaitSeconds"] = "1", ["Agent:DrainTimeoutSeconds"] = drainSeconds.ToString(), ["Agent:MaxDeliveries"] = "2",
+            ["Agent:LockRenewalSeconds"] = lockRenewalSeconds.ToString(),
         });
         b.Services.AddSecAgentAgentHost(b.Configuration, new AgentHostRegistry().AddTransport(new InProcessTransportModule()).AddRole(new ProbeRole(probe)));
         var app = b.Build();
@@ -558,6 +559,213 @@ public sealed class AgentQueueConsumerTests
             Assert.Equal(1, await HealthProbe.RunAsync("http://127.0.0.1:1/healthz"));
         }
         finally { await app.StopAsync(); await app.DisposeAsync(); }
+    }
+}
+
+/// <summary>Lock renewal and settlement failures in the generic consumer, driven with a fake delivery (no broker).</summary>
+public sealed class AgentConsumerLockTests
+{
+    sealed class FakeDelivery : IAgentDelivery
+    {
+        public AgentMessage Message { get; } = new("m-" + Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString(), "test", "{}");
+        public int DeliveryCount => 1;
+        public int Renewals;
+        public bool FailSettlement;
+        public string? Settled;
+        public Task CompleteAsync(CancellationToken ct) => Settle("complete");
+        public Task AbandonAsync(string error, CancellationToken ct) => Settle("abandon");
+        public Task DeadLetterAsync(string reason, CancellationToken ct) => Settle("dead-letter");
+        Task Settle(string how) { Settled = how; return FailSettlement ? Task.FromException(new InvalidOperationException("lock lost")) : Task.CompletedTask; }
+        public Task<bool> RenewLockAsync(CancellationToken ct) { Interlocked.Increment(ref Renewals); return Task.FromResult(true); }
+    }
+
+    sealed class SlowHandler : IAgentMessageHandler
+    {
+        public static TimeSpan Duration = TimeSpan.Zero;
+        public Task HandleAsync(AgentDeliveryContext context, CancellationToken ct) => Task.Delay(Duration, ct);
+    }
+
+    sealed class SlowRole : IAgentRoleModule
+    {
+        public string Role => "slow-agent";
+        public void ConfigureServices(IServiceCollection services, AgentRoleContext context) => services.AddAgentMessageHandler<SlowHandler>(context, "slow-q");
+    }
+
+    static (IHost Host, AgentQueueConsumer Consumer, AgentHandlerRegistration Reg) Compose(int lockRenewalSeconds)
+    {
+        var dir = WorkerKit.TempDir();
+        var catalog = Path.Combine(dir, "agents.json");
+        File.WriteAllText(catalog, """{ "agents": [ { "name": "slow-agent", "consumes": ["slow-q"], "sends": ["results"] } ] }""");
+        var b = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { EnvironmentName = "Testing" });
+        b.Logging.ClearProviders();
+        b.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Agent:Role"] = "slow-agent", ["Agent:ContentRoot"] = TestEnv.RepoRoot, ["Agent:DataRoot"] = dir, ["Agent:CatalogPath"] = catalog,
+            ["Agent:LockRenewalSeconds"] = lockRenewalSeconds.ToString(),
+        });
+        b.Services.AddSecAgentAgentHost(b.Configuration, new AgentHostRegistry().AddTransport(new InProcessTransportModule()).AddRole(new SlowRole()));
+        var host = b.Build();   // not started: ProcessAsync is driven directly
+        var consumer = host.Services.GetServices<IHostedService>().OfType<AgentQueueConsumer>().Single();
+        return (host, consumer, host.Services.GetServices<AgentHandlerRegistration>().Single());
+    }
+
+    [Fact]
+    public async Task The_lock_is_renewed_while_a_long_handler_runs_and_renewal_stops_with_it()
+    {
+        var (host, consumer, reg) = Compose(lockRenewalSeconds: 1);
+        using var _ = host;
+        SlowHandler.Duration = TimeSpan.FromMilliseconds(2600);
+        var d = new FakeDelivery();
+        await consumer.ProcessAsync(reg, d);
+        Assert.Equal("complete", d.Settled);
+        Assert.InRange(d.Renewals, 2, 3);
+        var after = d.Renewals;
+        await Task.Delay(1300);
+        Assert.Equal(after, d.Renewals);   // the renewal loop ended with the handler
+    }
+
+    [Fact]
+    public async Task A_failing_settlement_is_logged_and_does_not_escape_the_consumer()
+    {
+        var (host, consumer, reg) = Compose(lockRenewalSeconds: 0);   // 0 = renewal off
+        using var _ = host;
+        SlowHandler.Duration = TimeSpan.Zero;
+        var d = new FakeDelivery { FailSettlement = true };
+        await consumer.ProcessAsync(reg, d);   // would previously throw and end the receive loop
+        Assert.Equal("complete", d.Settled);
+        Assert.Equal(0, d.Renewals);
+        Assert.Equal(0, consumer.InFlight);
+    }
+}
+
+/// <summary>File-queue leases: renewal keeps a claim; a lost claim's late settlement never touches the peer that re-claimed it.</summary>
+public sealed class FileQueueLeaseTests
+{
+    [Fact]
+    public void Renewing_the_lease_keeps_the_claim_past_the_original_expiry()
+    {
+        var root = WorkerKit.TempDir();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var a = new FileSystemMessageQueue(root, lease: TimeSpan.FromMinutes(1), clock: clock);
+        a.Publish("scan", "long", "{}");
+        Assert.True(a.TryReceive("scan", out var m));
+        clock.Now += TimeSpan.FromSeconds(50);
+        Assert.True(a.RenewLease(m!));
+        clock.Now += TimeSpan.FromSeconds(50);   // 100 s after the claim, 50 s after the renewal
+        var b = new FileSystemMessageQueue(root, lease: TimeSpan.FromMinutes(1), clock: clock);
+        Assert.False(b.TryReceive("scan", out _));
+        a.Complete(m!);
+        Assert.Equal(0, a.ReadyCount("scan"));
+    }
+
+    [Fact]
+    public void A_late_complete_or_abandon_after_the_lease_expired_leaves_the_peers_claim_alone()
+    {
+        var root = WorkerKit.TempDir();
+        var clock = new ManualClock(DateTimeOffset.UtcNow);
+        var slow = new FileSystemMessageQueue(root, lease: TimeSpan.FromMinutes(1), clock: clock);
+        slow.Publish("scan", "x", "{}");
+        slow.Publish("scan", "y", "{}");
+        Assert.True(slow.TryReceive("scan", out var x1));
+        Assert.True(slow.TryReceive("scan", out var y1));
+        clock.Now += TimeSpan.FromMinutes(2);   // both leases expire
+        var peer = new FileSystemMessageQueue(root, lease: TimeSpan.FromMinutes(1), clock: clock);
+        Assert.True(peer.TryReceive("scan", out var x2));
+        Assert.True(peer.TryReceive("scan", out var y2));
+        Assert.Equal(["x", "y"], new[] { x2!.MessageId, y2!.MessageId }.Order());   // frozen clock: same enqueue tick, order not asserted
+
+        Assert.False(slow.RenewLease(x1!));   // the claim is gone
+        slow.Complete(x1!);                    // late settlements: no-ops
+        slow.Abandon(y1!, "late");
+        Assert.Equal(0, peer.ReadyCount("scan"));                       // nothing duplicated back to ready/
+        Assert.Equal(2, Directory.EnumerateFiles(Path.Combine(root, "scan", "inflight")).Count());   // peer's claims intact
+        Assert.True(peer.RenewLease(x2));
+        peer.Complete(x2);
+        peer.Complete(y2);
+        Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "scan", "inflight")));
+        Assert.Empty(peer.DeadLetters("scan"));
+    }
+}
+
+/// <summary>Service Bus readiness does a real broker operation, so a namespace that cannot be reached is not ready.</summary>
+public sealed class ServiceBusReadinessTests
+{
+    sealed class FakeCredential : Azure.Core.TokenCredential
+    {
+        public override Azure.Core.AccessToken GetToken(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            new("synthetic-token", DateTimeOffset.UtcNow.AddHours(1));
+        public override ValueTask<Azure.Core.AccessToken> GetTokenAsync(Azure.Core.TokenRequestContext requestContext, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(GetToken(requestContext, cancellationToken));
+    }
+
+    [Fact]
+    public async Task An_unreachable_namespace_reports_not_ready_even_though_the_client_is_open()
+    {
+        await using var client = new Azure.Messaging.ServiceBus.ServiceBusClient("secagent-test.servicebus.invalid", new FakeCredential(),
+            new Azure.Messaging.ServiceBus.ServiceBusClientOptions
+            {
+                RetryOptions = new Azure.Messaging.ServiceBus.ServiceBusRetryOptions { MaxRetries = 0, TryTimeout = TimeSpan.FromSeconds(5) },
+            });
+        var transport = new ServiceBusAgentTransport(client, new ServiceBusTransportOptions { Namespace = "secagent-test.servicebus.invalid" },
+            new ServiceBusProbeTargets(["results"], []), TimeProvider.System);
+        Assert.False(client.IsClosed);
+        var (ok, detail) = await transport.CheckAsync(CancellationToken.None);
+        Assert.False(ok);
+        Assert.Contains("not usable", detail);
+        await transport.DisposeAsync();
+    }
+
+    [Fact]
+    public void Probe_targets_cover_sends_and_peekable_entities_but_never_session_queues()
+    {
+        var c = AgentCatalog.Load(Path.Combine(TestEnv.RepoRoot, "deploy", "agents.json"));
+        var ctx = new AgentRoleContext(c.Find("audit-writer")!, c, new AgentHostOptions(), new ConfigurationBuilder().Build());
+        var t = ServiceBusProbeTargets.For(ctx, new ServiceBusTransportOptions());
+        Assert.All(t.PeekEntities, e => Assert.NotNull(ServiceBusAgentTransport.SplitSubscription(e).Topic));
+        var orch = new AgentRoleContext(c.Find("orchestrator")!, c, new AgentHostOptions(), new ConfigurationBuilder().Build());
+        var o = ServiceBusProbeTargets.For(orch, new ServiceBusTransportOptions());
+        Assert.Contains(c.RunEventsTopic, o.SendEntities);
+        Assert.DoesNotContain("results", o.PeekEntities);   // session-enabled queue: accepting a session would take it
+    }
+}
+
+/// <summary>Run-event fan-out retries a failed publish instead of dropping the event (the audit writer's evidence).</summary>
+public sealed class RunEventFanOutTests
+{
+    sealed class FlakyPublisher(int failures) : IAgentQueuePublisher
+    {
+        int _left = failures;
+        public readonly List<string> Delivered = [];
+        public int Attempts;
+        public Task PublishAsync(string queue, AgentMessage message, CancellationToken ct) => throw new NotSupportedException();
+        public Task PublishToTopicAsync(string topic, IReadOnlyList<string> subscriptions, AgentMessage message, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Attempts);
+            if (Interlocked.Decrement(ref _left) >= 0) throw new InvalidOperationException("broker unavailable");
+            lock (Delivered) Delivered.Add(message.MessageId);
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task Events_are_retried_through_transient_failures_and_delivered_in_order()
+    {
+        var c = AgentCatalog.Load(Path.Combine(TestEnv.RepoRoot, "deploy", "agents.json"));
+        var ctx = new AgentRoleContext(c.Find("orchestrator")!, c, new AgentHostOptions(), new ConfigurationBuilder().Build());
+        var masker = new SecretMasker();
+        var bus = new RunEventBus(masker);
+        var publisher = new FlakyPublisher(failures: 3);
+        var fanOut = new RunEventFanOut(bus, masker, publisher, ctx, new RunEventPublishRetry(TimeSpan.FromMilliseconds(10), TimeSpan.FromMilliseconds(40)),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RunEventFanOut>.Instance);
+        await fanOut.StartAsync(CancellationToken.None);
+        var run = Guid.NewGuid();
+        bus.Publish(run, "a", new { });
+        bus.Publish(run, "b", new { });
+        var until = DateTime.UtcNow.AddSeconds(10);
+        while (true) { lock (publisher.Delivered) if (publisher.Delivered.Count == 2) break; if (DateTime.UtcNow > until) throw new TimeoutException(); await Task.Delay(20); }
+        await fanOut.StopAsync(CancellationToken.None);
+        Assert.Equal([$"{run:N}:1", $"{run:N}:2"], publisher.Delivered);
+        Assert.Equal(5, publisher.Attempts);
     }
 }
 

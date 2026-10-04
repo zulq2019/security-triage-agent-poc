@@ -32,7 +32,9 @@ public sealed class OrchestratorRole : IAgentRoleModule
         services.AddSecAgentIntake(context.Configuration);
         services.AddSecAgentIntakeAzure(context.Configuration);
         services.AddAgentMessageHandler<WorkResultHandler>(context, "results");
-        services.AddSingleton<RunEventFanOut>();
+        services.AddSingleton(new RunEventPublishRetry(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30)));
+        services.AddSingleton(sp => new RunEventFanOut(sp.GetRequiredService<AgentServices>().Bus, sp.GetRequiredService<AgentServices>().Masker,
+            sp.GetRequiredService<IAgentQueuePublisher>(), context, sp.GetRequiredService<RunEventPublishRetry>(), sp.GetRequiredService<ILogger<RunEventFanOut>>()));
         services.AddHostedService(sp => sp.GetRequiredService<RunEventFanOut>());
     }
 }
@@ -49,16 +51,23 @@ sealed class WorkResultHandler(AgentServices svc, ILogger<WorkResultHandler> log
     }
 }
 
+/// <summary>Backoff for run-event publication: first retry after <paramref name="Initial"/>, doubling up to <paramref name="Max"/>.</summary>
+sealed record RunEventPublishRetry(TimeSpan Initial, TimeSpan Max);
+
 /// <summary>Copies each run event (already masked by RunEventBus) to the run-events topic. Local transports emulate the topic by one copy
 /// per worker subscription (audit); Service Bus fans out to every subscription. Events are queued in memory so the workflow thread never
-/// waits on the broker.</summary>
-sealed class RunEventFanOut(AgentServices svc, IAgentQueuePublisher publisher, AgentRoleContext context, ILogger<RunEventFanOut> log) : BackgroundService
+/// waits on the broker.
+/// <para>A failed publish is retried with backoff, in order, until it succeeds (MessageId = run:seq, so a retry that did reach the broker
+/// is dropped by duplicate detection): a broker interruption delays the audit writer but does not leave gaps in its evidence. Events
+/// still queued when the process stops are logged as undelivered; a durable outbox (SQL) is the follow-up for crash safety.</para></summary>
+sealed class RunEventFanOut(RunEventBus bus, SecretMasker masker, IAgentQueuePublisher publisher, AgentRoleContext context, RunEventPublishRetry retry,
+    ILogger<RunEventFanOut> log) : BackgroundService
 {
     readonly Channel<(Guid RunId, string Json)> _events = Channel.CreateUnbounded<(Guid, string)>(new UnboundedChannelOptions { SingleReader = true });
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        svc.Bus.OnEvent += OnEvent;
+        bus.OnEvent += OnEvent;
         return base.StartAsync(cancellationToken);
     }
 
@@ -72,20 +81,38 @@ sealed class RunEventFanOut(AgentServices svc, IAgentQueuePublisher publisher, A
         {
             await foreach (var (runId, json) in _events.Reader.ReadAllAsync(stoppingToken))
             {
-                try
-                {
-                    var seq = JsonDocument.Parse(json).RootElement.TryGetProperty("seq", out var s) ? s.GetInt32() : 0;
-                    await publisher.PublishToTopicAsync(topic, subs, new AgentMessage($"{runId:N}:{seq}", runId.ToString(), AgentMessageTypes.RunEvent, json), stoppingToken);
-                }
-                catch (Exception e) when (e is not OperationCanceledException) { log.LogWarning("run-events publish failed: {Error}", svc.Masker.Mask(e.Message, false)); }
+                var seq = JsonDocument.Parse(json).RootElement.TryGetProperty("seq", out var s) ? s.GetInt32() : 0;
+                var message = new AgentMessage($"{runId:N}:{seq}", runId.ToString(), AgentMessageTypes.RunEvent, json);
+                await PublishWithRetryAsync(topic, subs, message, stoppingToken);
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            var left = _events.Reader.Count;
+            if (left > 0) log.LogError("run-events: {Count} event(s) not delivered to the audit writer before shutdown", left);
+        }
+    }
+
+    /// <summary>Retries one event until it is published or the host stops (then the event is counted as undelivered).</summary>
+    async Task PublishWithRetryAsync(string topic, IReadOnlyList<string> subs, AgentMessage message, CancellationToken ct)
+    {
+        var delay = retry.Initial;
+        for (var attempt = 1; ; attempt++)
+        {
+            try { await publisher.PublishToTopicAsync(topic, subs, message, ct); return; }
+            catch (Exception e) when (e is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                log.LogWarning("run-events publish of {MessageId} failed (attempt {Attempt}, retrying in {Delay}s): {Error}",
+                    message.MessageId, attempt, delay.TotalSeconds, masker.Mask(e.Message, false));
+            }
+            await Task.Delay(delay, ct);
+            delay = TimeSpan.FromTicks(Math.Min(retry.Max.Ticks, delay.Ticks * 2));
+        }
     }
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
-        svc.Bus.OnEvent -= OnEvent;
+        bus.OnEvent -= OnEvent;
         _events.Writer.TryComplete();
         return base.StopAsync(cancellationToken);
     }

@@ -5,12 +5,22 @@ using SecAgent.Core;
 
 namespace SecAgent.Hosting;
 
+/// <summary>Optional capability of an <see cref="IMessageQueue"/> whose receives are leased claims (like a Service Bus lock): the consumer
+/// renews the lease while its handler runs. Separate from IMessageQueue (Core), which the in-process queue implements without leases.</summary>
+public interface IMessageLeaseRenewal
+{
+    /// <summary>Restarts the lease of a received, unsettled message. False when the claim is gone (expired and taken by another consumer).</summary>
+    bool RenewLease(QueueMessage message);
+}
+
 /// <summary><see cref="IMessageQueue"/> over a shared folder, so several containers on one machine (docker compose) can pass messages
 /// without a broker. Stands in for Service Bus locally; not for production.
-/// <para>Layout per queue: <c>ready/</c> (FIFO by file name), <c>inflight/</c> (claimed: an atomic rename, so only one consumer gets a
-/// message), <c>dlq/</c>, <c>seen/</c> (duplicate detection by MessageId within a window). A claim older than the lease is put back
-/// (crash recovery, like a Service Bus lock expiring). Delivery counts are kept in the file, so they survive restarts.</para></summary>
-public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealth
+/// <para>Layout per queue: <c>ready/</c> (FIFO by file name), <c>inflight/</c> (claimed: an atomic rename to a name unique to this claim,
+/// so only one consumer gets a message), <c>dlq/</c>, <c>seen/</c> (duplicate detection by MessageId within a window). A claim older than the
+/// lease is put back (crash recovery, like a Service Bus lock expiring); a running handler keeps its claim alive with
+/// <see cref="RenewLease"/>. Settling a claim that was already recovered and re-claimed touches nothing (each claim has its own file name).
+/// Delivery counts are kept in the file, so they survive restarts.</para></summary>
+public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealth, IMessageLeaseRenewal
 {
     readonly string _root;
     readonly int _maxDeliveries;
@@ -76,7 +86,7 @@ public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealt
         var inflight = Dir(queue, "inflight");
         foreach (var file in Directory.EnumerateFiles(ready, "*.json").Order(StringComparer.Ordinal))
         {
-            var claimed = Path.Combine(inflight, Path.GetFileName(file));
+            var claimed = Path.Combine(inflight, ClaimName(file));
             try { File.Move(file, claimed); }
             catch (IOException) { continue; }          // another consumer claimed it first
             catch (UnauthorizedAccessException) { continue; }
@@ -84,7 +94,8 @@ public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealt
             try { s = JsonSerializer.Deserialize<Stored>(File.ReadAllText(claimed), Json)!; }
             catch (JsonException) { File.Move(claimed, Path.Combine(Dir(queue, "dlq"), Path.GetFileName(file)), overwrite: true); continue; }
             s = s with { DeliveryCount = s.DeliveryCount + 1 };
-            Write(claimed, s, queue);                  // persists the count and starts the lease (mtime)
+            Write(claimed, s, queue);                  // persists the count
+            File.SetLastWriteTimeUtc(claimed, _clock.GetUtcNow().UtcDateTime);   // starts the lease (mtime, on the queue's clock)
             var m = new QueueMessage { Queue = queue, MessageId = s.MessageId, Body = s.Body, DeliveryCount = s.DeliveryCount, Error = s.Error, EnqueuedAt = s.EnqueuedAt };
             _claims.AddOrUpdate(m, claimed);
             message = m;
@@ -103,8 +114,27 @@ public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealt
         }
     }
 
+    /// <summary>"…/ready/0001-abc.json" → "0001-abc~&lt;claim id&gt;.json". The claim id makes a re-claim after lease expiry a different file.</summary>
+    static string ClaimName(string readyFile) => $"{Path.GetFileNameWithoutExtension(readyFile)}~{Guid.NewGuid():N}.json";
+
+    /// <summary>Inverse of <see cref="ClaimName"/>: the ready/ name a recovered claim goes back under (same FIFO position).</summary>
+    static string ReadyName(string claimFile)
+    {
+        var name = Path.GetFileNameWithoutExtension(claimFile);
+        var i = name.IndexOf('~');
+        return (i > 0 ? name[..i] : name) + ".json";
+    }
+
+    public bool RenewLease(QueueMessage m)
+    {
+        if (!_claims.TryGetValue(m, out var path)) return false;
+        try { File.SetLastWriteTimeUtc(path, _clock.GetUtcNow().UtcDateTime); return true; }
+        catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) { return false; }   // recovered by a peer
+    }
+
     public void Complete(QueueMessage m)
     {
+        // A claim recovered after its lease (and possibly re-claimed under a new name) is simply gone: nothing to delete.
         if (_claims.TryGetValue(m, out var path)) { _claims.Remove(m); File.Delete(path); }
     }
 
@@ -112,9 +142,10 @@ public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealt
     {
         if (!_claims.TryGetValue(m, out var path)) return;
         _claims.Remove(m);
+        if (!File.Exists(path)) return;   // claim lost to lease recovery: the message is already back in circulation, do not duplicate it
         m.Error = error;
         var s = new Stored(m.MessageId, m.Body, m.DeliveryCount, m.EnqueuedAt, error);
-        var target = m.DeliveryCount >= _maxDeliveries ? Path.Combine(Dir(m.Queue, "dlq"), Path.GetFileName(path)) : Path.Combine(Dir(m.Queue, "ready"), NewName(m.MessageId));
+        var target = m.DeliveryCount >= _maxDeliveries ? Path.Combine(Dir(m.Queue, "dlq"), ReadyName(path)) : Path.Combine(Dir(m.Queue, "ready"), NewName(m.MessageId));
         Write(target, s, m.Queue);
         File.Delete(path);
     }
@@ -136,7 +167,7 @@ public sealed class FileSystemMessageQueue : IMessageQueue, IAgentTransportHealt
         _lastRecovery[queue] = now;
         foreach (var f in Directory.EnumerateFiles(Dir(queue, "inflight"), "*.json"))
             if (now.UtcDateTime - File.GetLastWriteTimeUtc(f) > _lease)
-                try { File.Move(f, Path.Combine(Dir(queue, "ready"), Path.GetFileName(f))); } catch (IOException) { }
+                try { File.Move(f, Path.Combine(Dir(queue, "ready"), ReadyName(f))); } catch (IOException) { }
     }
 
     public Task<(bool Ok, string Detail)> CheckAsync(CancellationToken ct)

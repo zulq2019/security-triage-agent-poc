@@ -101,39 +101,100 @@ public sealed class AgentQueueConsumer(
         var sw = Stopwatch.StartNew();
         var token = _processing.Token;
         string outcome;
+        Exception? failure = null;
+        using (var renewal = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            var renewing = RenewWhileRunningAsync(d, reg.Entity, renewal.Token);
+            try
+            {
+                await using var scope = scopes.CreateAsyncScope();
+                var handler = (IAgentMessageHandler)scope.ServiceProvider.GetRequiredService(reg.HandlerType);
+                await handler.HandleAsync(new AgentDeliveryContext(msg, d.DeliveryCount, reg.Entity), token);
+            }
+            catch (Exception e) { failure = e; }
+            finally
+            {
+                renewal.Cancel();
+                await renewing;   // never throws: renewal problems are logged
+            }
+        }
         try
         {
-            await using var scope = scopes.CreateAsyncScope();
-            var handler = (IAgentMessageHandler)scope.ServiceProvider.GetRequiredService(reg.HandlerType);
-            await handler.HandleAsync(new AgentDeliveryContext(msg, d.DeliveryCount, reg.Entity), token);
-            await d.CompleteAsync(CancellationToken.None);
-            outcome = "completed";
-        }
-        catch (AgentMessageRejectedException e)
-        {
-            var reason = masker.Mask(e.Message, false);
-            log.LogWarning("agent {Role}: {MessageId} on {Entity} rejected (dead-lettered): {Reason}", context.Spec.Name, msg.MessageId, reg.Entity, reason);
-            await d.DeadLetterAsync(reason, CancellationToken.None);
-            span?.SetStatus(ActivityStatusCode.Error, reason);
-            outcome = "rejected";
-        }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
-        {
-            log.LogWarning("agent {Role}: {MessageId} cancelled at the drain deadline; abandoned for redelivery", context.Spec.Name, msg.MessageId);
-            await d.AbandonAsync("shutdown: drain timeout", CancellationToken.None);
-            outcome = "abandoned";
-        }
-        catch (Exception e)
-        {
-            var reason = masker.Mask(e.Message.Length <= 500 ? e.Message : e.Message[..500], false);
-            log.LogError("agent {Role}: {MessageId} on {Entity} failed (delivery {Count}): {Error}", context.Spec.Name, msg.MessageId, reg.Entity, d.DeliveryCount, reason);
-            await d.AbandonAsync(reason, CancellationToken.None);
-            span?.SetStatus(ActivityStatusCode.Error, reason);
-            outcome = "failed";
+            switch (failure)
+            {
+                case null:
+                    await SettleAsync(d, reg.Entity, "complete", () => d.CompleteAsync(CancellationToken.None));
+                    outcome = "completed";
+                    break;
+                case AgentMessageRejectedException e:
+                {
+                    var reason = masker.Mask(e.Message, false);
+                    log.LogWarning("agent {Role}: {MessageId} on {Entity} rejected (dead-lettered): {Reason}", context.Spec.Name, msg.MessageId, reg.Entity, reason);
+                    await SettleAsync(d, reg.Entity, "dead-letter", () => d.DeadLetterAsync(reason, CancellationToken.None));
+                    span?.SetStatus(ActivityStatusCode.Error, reason);
+                    outcome = "rejected";
+                    break;
+                }
+                case OperationCanceledException when token.IsCancellationRequested:
+                    log.LogWarning("agent {Role}: {MessageId} cancelled at the drain deadline; abandoned for redelivery", context.Spec.Name, msg.MessageId);
+                    await SettleAsync(d, reg.Entity, "abandon", () => d.AbandonAsync("shutdown: drain timeout", CancellationToken.None));
+                    outcome = "abandoned";
+                    break;
+                default:
+                {
+                    var e = failure!;
+                    var reason = masker.Mask(e.Message.Length <= 500 ? e.Message : e.Message[..500], false);
+                    log.LogError("agent {Role}: {MessageId} on {Entity} failed (delivery {Count}): {Error}", context.Spec.Name, msg.MessageId, reg.Entity, d.DeliveryCount, reason);
+                    await SettleAsync(d, reg.Entity, "abandon", () => d.AbandonAsync(reason, CancellationToken.None));
+                    span?.SetStatus(ActivityStatusCode.Error, reason);
+                    outcome = "failed";
+                    break;
+                }
+            }
         }
         finally { Interlocked.Decrement(ref _inFlight); }
         span?.SetTag("secagent.outcome", outcome);
         metrics.Record(context.Spec.Name, reg.Entity, outcome, sw.Elapsed);
+    }
+
+    /// <summary>Renews the delivery's lock every Agent:LockRenewalSeconds until the handler finishes. A lost lock is logged (the broker
+    /// may already be redelivering the message); the handler is not interrupted, and settlement then fails safely.</summary>
+    async Task RenewWhileRunningAsync(IAgentDelivery d, string entity, CancellationToken ct)
+    {
+        var every = TimeSpan.FromSeconds(context.Options.LockRenewalSeconds);
+        if (every <= TimeSpan.Zero) return;
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(every, ct);
+                bool renewed;
+                try { renewed = await d.RenewLockAsync(ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+                catch (Exception e)
+                {
+                    log.LogWarning("agent {Role}: lock renewal for {MessageId} on {Entity} failed: {Error}", context.Spec.Name, d.Message.MessageId, entity, masker.Mask(e.Message, false));
+                    continue;
+                }
+                if (!renewed)
+                {
+                    log.LogWarning("agent {Role}: lock for {MessageId} on {Entity} was lost while the handler ran; it may be redelivered", context.Spec.Name, d.Message.MessageId, entity);
+                    return;
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>Settlement never takes the receive loop down: if it fails (lock lost, broker down) the broker redelivers the message after
+    /// the lock expires, and the handler's duplicate detection / idempotency covers the second delivery.</summary>
+    async Task SettleAsync(IAgentDelivery d, string entity, string action, Func<Task> settle)
+    {
+        try { await settle(); }
+        catch (Exception e)
+        {
+            log.LogError("agent {Role}: {Action} of {MessageId} on {Entity} failed (it will be redelivered): {Error}", context.Spec.Name, action, d.Message.MessageId, entity, masker.Mask(e.Message, false));
+        }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
