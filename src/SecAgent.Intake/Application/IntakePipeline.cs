@@ -21,6 +21,11 @@ public sealed class IntakeContext(IntakeMetadata meta, ReadOnlyMemory<byte> body
     public IFindingParser? Parser { get; set; }
     public ParseOutcome? Parsed { get; set; }
     public IntakeRecord? Record { get; set; }
+    /// <summary>The claim token this delivery holds (set by the claim step). Every ledger write after the claim is fenced with it
+    /// (<see cref="IIntakeLedger.TryUpdate"/>); a write that reports anything but Updated means the claim was taken over: stop.</summary>
+    public string? ClaimToken { get; set; }
+    /// <summary>True while this delivery holds an unfinished claim (claimed, run not yet requested).</summary>
+    public bool HoldsClaim => ClaimToken != null && Record is { Status: IntakeStatus.Claimed };
     public RawRef? Raw { get; set; }
     public RunTicket? Ticket { get; set; }
 
@@ -39,7 +44,11 @@ public interface IIntakeStep
 /// <summary>Runs the registered steps in order: limits → duplicate fast path → parse → claim key → store raw → canonical findings → enqueue.
 /// Turns rejections into results (and logs them, masked). Nothing is stored for a payload rejected before the claim.
 /// If anything fails after the claim and before a run was requested (rejection, storage or queue error, cancellation), the claim is
-/// marked <see cref="IntakeStatus.Failed"/>, so the producer's retry takes it over at once instead of being told "duplicate".</summary>
+/// marked <see cref="IntakeStatus.Failed"/>, so the producer's retry takes it over at once instead of being told "duplicate".
+/// <para>Fencing: while this delivery holds the claim, the pipeline renews it (a compare-and-set on the claim token, which also extends
+/// the lease) before every further step, and every step writes the record only through the same compare-and-set. When the claim was
+/// taken over (this delivery was slower than Intake:ClaimLeaseSeconds), the delivery stops with no further side effects (nothing stored,
+/// enqueued or written) and answers 503 + Retry-After; the producer's retry sees the new owner's result.</para></summary>
 public sealed class IntakePipeline(IEnumerable<IIntakeStep> steps, IIntakeLedger ledger, SecretMasker masker, ILogger<IntakePipeline> log) : IIntakeAcceptor
 {
     readonly IIntakeStep[] _steps = steps.OrderBy(s => s.Order).ToArray();
@@ -50,33 +59,56 @@ public sealed class IntakePipeline(IEnumerable<IIntakeStep> steps, IIntakeLedger
         try
         {
             foreach (var step in _steps)
+            {
+                if (ctx.HoldsClaim && !Renew(ctx)) return IntakeResult.ClaimLost(ctx.Record!);
                 if (await step.ExecuteAsync(ctx, ct) is { } result) return result;
+            }
             throw new InvalidOperationException("intake pipeline ended without a result (no step produced one)");
         }
         catch (IntakeRejectedException e)
         {
             log.LogWarning("intake rejected ({Status}) {Repo}@{Sha} {Scanner} run {RunId}: {Reason}",
                 e.StatusCode, meta.Repo, meta.HeadSha[..7], meta.Scanner, meta.RunId, masker.Mask(e.Message, false));
-            ReleaseClaim(ctx, $"rejected ({e.StatusCode}): {e.Message}");
-            return IntakeResult.Rejected(e.StatusCode, e.Message);
+            return ReleaseClaim(ctx, $"rejected ({e.StatusCode}): {e.Message}") ? IntakeResult.Rejected(e.StatusCode, e.Message) : IntakeResult.ClaimLost(ctx.Record!);
         }
         catch (Exception e)
         {
-            ReleaseClaim(ctx, e is OperationCanceledException ? "delivery cancelled" : $"processing failed: {e.GetType().Name}");
+            var cancelled = e is OperationCanceledException;
+            if (!ReleaseClaim(ctx, cancelled ? "delivery cancelled" : $"processing failed: {e.GetType().Name}") && !cancelled) return IntakeResult.ClaimLost(ctx.Record!);
             throw;
         }
     }
 
-    /// <summary>Marks this delivery's claim failed (only while it is still an unfinished claim; a queued record is left alone).</summary>
-    void ReleaseClaim(IntakeContext ctx, string reason)
+    /// <summary>Fenced heartbeat: rewrites the record with this delivery's claim token (and a fresh UpdatedAt, which extends the lease).</summary>
+    bool Renew(IntakeContext ctx)
     {
-        if (ctx.Record is not { Status: IntakeStatus.Claimed } record) return;
+        if (ledger.TryUpdate(ctx.Record!, ctx.ClaimToken!) == LedgerWriteResult.Updated) return true;
+        LogClaimLost(ctx);
+        return false;
+    }
+
+    /// <summary>Marks this delivery's claim failed (only while it is still an unfinished claim; a queued record is left alone). Fenced:
+    /// a delivery whose claim was taken over writes nothing. Returns false when the claim was lost (the caller answers 503).</summary>
+    bool ReleaseClaim(IntakeContext ctx, string reason)
+    {
+        if (!ctx.HoldsClaim) return true;
+        var record = ctx.Record!;
         try
         {
             record.Status = IntakeStatus.Failed;
             record.Detail = masker.Mask(reason.Length <= 300 ? reason : reason[..300], false);
-            ledger.Update(record);
+            if (ledger.TryUpdate(record, ctx.ClaimToken!) == LedgerWriteResult.Updated) return true;
+            LogClaimLost(ctx);
+            return false;
         }
-        catch (Exception e) { log.LogError("intake {IntakeId}: could not release the claim (it frees up after the lease): {Error}", record.IntakeId, masker.Mask(e.Message, false)); }
+        catch (Exception e)
+        {
+            log.LogError("intake {IntakeId}: could not release the claim (it frees up after the lease): {Error}", record.IntakeId, masker.Mask(e.Message, false));
+            return true;
+        }
     }
+
+    void LogClaimLost(IntakeContext ctx) =>
+        log.LogWarning("intake {IntakeId}: claim was taken over by another delivery (lease expired); this delivery stopped without further writes",
+            ctx.Record!.IntakeId);
 }

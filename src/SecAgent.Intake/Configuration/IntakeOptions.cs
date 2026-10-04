@@ -25,6 +25,10 @@ public sealed class IntakeOptions
     public int MaxJsonDepth { get; set; } = 64;
     /// <summary>A claimed-but-unfinished idempotency key older than this is resumed by the next delivery (crash recovery).</summary>
     public int ClaimLeaseSeconds { get; set; } = 120;
+    /// <summary>Lifetime ceiling on claim takeovers per idempotency key (failed or lease expired). When a further takeover would exceed it,
+    /// the record is marked failed for good (409, "send a new run id") instead of being reclaimed forever, e.g. by a payload that keeps
+    /// crashing the worker.</summary>
+    public int MaxClaimTakeovers { get; set; } = 5;
     /// <summary>Accepted source_scanner values (must also be in rules/schema/finding.schema.json).</summary>
     public List<string> AllowedScanners { get; set; } = ["blackduck"];
     /// <summary>Repos allowed to push (owner/name, "*" suffix wildcard: "my-org/*"). Empty = any repo.</summary>

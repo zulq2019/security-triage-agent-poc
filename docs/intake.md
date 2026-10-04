@@ -75,8 +75,8 @@ commit scanned by the same workflow run is the same evidence).
 |---|---|
 | `202 accepted` | stored, parsed, run queued. Body: `intake_id`, `idempotency_key`, `mode`, `findings`, `by_issue_type`, `raw`, `run_ticket`, `notes` |
 | `200 duplicate` | same key and same body already accepted (workflow retry); nothing new happens |
-| `409` | same key, **different** body: send a new run id |
-| `503 in_progress` | same key and body, but another delivery is still processing it (inside `Intake:ClaimLeaseSeconds`). Sent with `Retry-After`; retry (curl `--retry` honours it). Never reported as `duplicate`, because that delivery may still fail |
+| `409` | same key, **different** body: send a new run id. Also (`status: failed`) when the key used up `Intake:MaxClaimTakeovers` |
+| `503 in_progress` | same key and body, but another delivery is still processing it (inside `Intake:ClaimLeaseSeconds`), or this delivery's claim was taken over while it was running. Sent with `Retry-After`; retry (curl `--retry` honours it). Never reported as `duplicate`, because that delivery may still fail |
 | `400` | missing/invalid metadata, body not JSON |
 | `401` | missing/bad signature, wrong secret, timestamp outside the window, any signed header changed |
 | `403` | repo not in `Intake:AllowedRepos` |
@@ -86,9 +86,25 @@ commit scanned by the same workflow run is the same evidence).
 | `503` | intake disabled, or the secret env var is not set (the endpoint never runs unauthenticated) |
 
 **Claims and retries.** The first delivery claims the idempotency key. If it fails after that (rejected, storage or queue error,
-cancelled), the claim is marked `failed` and the next retry takes it over at once. If it crashes without marking anything, the claim is
-taken over once it is older than `Intake:ClaimLeaseSeconds` (120 s). A takeover is a compare-and-swap on the record's claim token, so only
-one of several concurrent retries resumes it. Only an accepted intake (a run was requested) answers `200 duplicate`.
+cancelled), the claim is marked `failed` and the next retry takes it over at once. If it crashes or stalls without marking anything, the
+claim is taken over once it is older than `Intake:ClaimLeaseSeconds` (120 s). A takeover is a compare-and-set on the record's claim token
+that also issues a new token, so only one of several concurrent retries resumes it. Only an accepted intake (a run was requested) answers
+`200 duplicate`.
+
+A claim is a **lease, not a lock**: a delivery that was merely slow (longer than the lease) can still be running when a retry takes
+its claim over. So every write the claim holder makes is **fenced** with its claim token: `IIntakeLedger.TryUpdate(record,
+expectedClaimToken)` is a compare-and-set (in `FileIntakeLedger` under the same lock as claim creation and takeover; an ETag / rowversion
+check in a cloud ledger) that returns `Updated`, `LostOwnership` or `NotFound`. The port has no unconditional update. The pipeline renews
+the claim with that write before every step after the claim (which also extends the lease), and the canonical-findings, queued, release
+(`failed`) and dispatcher (`run_started`, `superseded`, `start_failed`, `backlog_pending`) writes all go through it. A delivery that gets
+`LostOwnership` stops at once with no further side effects (nothing more stored, no enqueue, no ledger write) and answers `503 in_progress`
+with `Retry-After`; the producer's retry then sees the new owner's result. The fence is checked before each side effect, not held across
+it: a delivery that stalls between the check and the write can still do that one write, which the write-once raw store and the queue's
+MessageId dedupe absorb.
+
+Takeovers are capped per key by `Intake:MaxClaimTakeovers` (default 5, counted on the record). When a further takeover would exceed it,
+the record is marked `failed` for good (`terminal: true`, with the reason in `detail`) under a token nobody holds, and the delivery gets
+`409` (send a new run id), instead of a payload that keeps crashing the worker being reclaimed forever.
 
 `GET /api/intake` lists the last 100 intakes (metadata, counts, status; never payload content). It is **authenticated** like the POST:
 
@@ -178,6 +194,7 @@ should push the rapid-scan JSON (keep it with `--detect.cleanup=false`), and SAR
 |---|---|---|
 | `Enabled` | `true` | env `SECAGENT_INTAKE_ENABLED=0` turns it off, for the webhook **and** the Blob path (`503`; the drop folder leaves files in place) |
 | `ClaimLeaseSeconds` | `120` | an unfinished claim older than this is taken over by the next delivery; before that, retries get `503 in_progress` |
+| `MaxClaimTakeovers` | `5` | lifetime ceiling on claim takeovers per key (1..100); past it the key is failed for good (`409`) |
 | `AdminTokenEnv` | `SECAGENT_INTAKE_ADMIN_TOKEN` | **name** of the env var holding the bearer token for `GET /api/intake` |
 | `ListingAcceptsHmac` | `true` | `GET /api/intake` also accepts an HMAC-signed request (scope `_list`) |
 | `ListingAllowsLoopback` | `false` | dev only: unauthenticated listing from this machine without proxy headers |
@@ -257,7 +274,7 @@ builder.Services.AddSecAgentIntakeAzure(builder.Configuration);   // registers t
 | Port (SecAgent.Abstractions) | Local adapter (`local`) | Azure adapter |
 |---|---|---|
 | `IRawFindingStore` | `LocalRawFindingStore` over the write-once local blob store | `AzureBlobRawFindingStore` (create-only uploads, same `blob://raw/…` URIs) |
-| `IIntakeLedger` + `IIntakeRecordQuery` | `FileIntakeLedger` (atomic create-new claim files) | TODO: SQL table with a unique key, or Table Storage |
+| `IIntakeLedger` + `IIntakeRecordQuery` | `FileIntakeLedger` (atomic create-new claim files; claim-token compare-and-set under one lock, single instance) | TODO: SQL table with a unique key + rowversion, or Table Storage with ETag (If-Match) for `TryUpdate` |
 | `IRunStarter` + `IIntakeRunSource` | `LocalIntakeRunQueue` (in-process queue, message id = key) | `ServiceBusIntakeRunQueue` (duplicate detection on `MessageId`) |
 | `IBlobReader` | `LocalDropFolderBlobReader` (drop folder only) | `AzureBlobReader` (managed identity) |
 | `IIntakeAuthenticator` | `HmacIntakeAuthenticator` | same; OIDC option is a TODO |

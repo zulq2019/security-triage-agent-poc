@@ -36,15 +36,28 @@ public interface IRawFindingStore
     byte[] Get(string uri);
 }
 
-/// <summary>Idempotency ledger writes (local JSON files; a SQL table or Table Storage in the cloud). TryClaim is atomic per key.</summary>
+/// <summary>Outcome of a fenced ledger write (<see cref="IIntakeLedger.TryUpdate"/>).</summary>
+public enum LedgerWriteResult
+{
+    /// <summary>The stored record still carried the expected claim token; it was replaced.</summary>
+    Updated,
+    /// <summary>The stored record carries another claim token: another delivery took the claim over (or it was terminalized). Nothing was
+    /// written; the caller no longer owns the record and must stop without further side effects.</summary>
+    LostOwnership,
+    /// <summary>No record under that key. Nothing was written.</summary>
+    NotFound,
+}
+
+/// <summary>Idempotency ledger writes (local JSON files; a SQL table or Table Storage in the cloud). TryClaim is atomic per key.
+/// <para>Fencing: after the claim, every write is a compare-and-set on the claim token (<see cref="TryUpdate"/>), so a delivery whose
+/// claim was taken over after the lease cannot overwrite the new owner's state. There is deliberately no unconditional update.</para></summary>
 public interface IIntakeLedger
 {
     bool TryClaim(IntakeRecord record, out IntakeRecord existing);
-    /// <summary>Takes over a failed or stale claim: replaces the stored record with <paramref name="next"/> only if the stored record still
-    /// carries <paramref name="expectedClaimToken"/> (compare-and-swap; an ETag / rowversion check in a cloud adapter). False = another
-    /// delivery took it over first.</summary>
-    bool TryReplace(string expectedClaimToken, IntakeRecord next);
-    void Update(IntakeRecord record);
+    /// <summary>Compare-and-set: replaces the stored record with <paramref name="record"/> only if the stored record still carries
+    /// <paramref name="expectedClaimToken"/> (an ETag / rowversion check in a cloud adapter), atomically with <see cref="TryClaim"/> and
+    /// other TryUpdate calls. A takeover passes the old token and a record with a new one; the claim holder passes its own token.</summary>
+    LedgerWriteResult TryUpdate(IntakeRecord record, string expectedClaimToken);
     IntakeRecord? Get(string key);
 }
 

@@ -8,7 +8,10 @@ namespace SecAgent.Intake.Storage;
 
 /// <summary>Local adapter for the ledger ports: one JSON file per key ({LedgerFolder}/&lt;key&gt;.json). The claim uses FileMode.CreateNew,
 /// which is atomic across threads and processes, so two identical concurrent POSTs cannot both be accepted.
-/// Cloud: a SQL table with a UNIQUE key column (INSERT … on duplicate → existing row) or Azure Table Storage (Add → 409 Conflict).</summary>
+/// Every later write is a compare-and-set on the claim token (<see cref="TryUpdate"/>). Claim creation and compare-and-set run under one
+/// ledger lock, so they are atomic with respect to each other within one process (the dev / single-instance setup); a multi-instance
+/// deployment uses a cloud ledger adapter: a SQL table with a UNIQUE key column and a rowversion check, or Azure Table Storage
+/// (Add → 409 Conflict, Replace with If-Match ETag).</summary>
 public sealed class FileIntakeLedger : IIntakeLedger, IIntakeRecordQuery
 {
     readonly string _dir;
@@ -27,42 +30,35 @@ public sealed class FileIntakeLedger : IIntakeLedger, IIntakeRecordQuery
     public bool TryClaim(IntakeRecord record, out IntakeRecord existing)
     {
         var path = PathOf(record.Key);
-        try
-        {
-            using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                JsonSerializer.Serialize(fs, record, Schema.JsonIndented);
-            existing = record;
-            return true;
-        }
-        catch (IOException) when (File.Exists(path))
-        {
-            existing = Read(path) ?? record;
-            return false;
-        }
-    }
-
-    /// <summary>Compare-and-swap on the claim token under the ledger lock. Atomic within one process (the dev / single-instance setup);
-    /// a multi-instance deployment uses a cloud ledger adapter with an ETag / rowversion check.</summary>
-    public bool TryReplace(string expectedClaimToken, IntakeRecord next)
-    {
         lock (_lock)
         {
-            var path = PathOf(next.Key);
-            if (!File.Exists(path) || Read(path) is not { } current || current.ClaimToken != expectedClaimToken) return false;
-            Update(next);
-            return true;
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    JsonSerializer.Serialize(fs, record, Schema.JsonIndented);
+                existing = record;
+                return true;
+            }
+            catch (IOException) when (File.Exists(path))
+            {
+                existing = Read(path) ?? record;
+                return false;
+            }
         }
     }
 
-    public void Update(IntakeRecord record)
+    public LedgerWriteResult TryUpdate(IntakeRecord record, string expectedClaimToken)
     {
-        record.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         var path = PathOf(record.Key);
         lock (_lock)
         {
+            if (!File.Exists(path) || Read(path) is not { } current) return LedgerWriteResult.NotFound;
+            if (current.ClaimToken != expectedClaimToken) return LedgerWriteResult.LostOwnership;
+            record.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
             var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(tmp, JsonSerializer.Serialize(record, Schema.JsonIndented));
             File.Move(tmp, path, overwrite: true);
+            return LedgerWriteResult.Updated;
         }
     }
 

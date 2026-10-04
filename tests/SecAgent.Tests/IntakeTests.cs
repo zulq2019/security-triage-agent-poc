@@ -606,8 +606,9 @@ public class IntakeServiceTests
         using var k = new IntakeKit();
         var key = IntakeKit.Meta().IdempotencyKey;
         k.Ledger.TryClaim(new IntakeRecord { Key = key, ClaimToken = "t0", UpdatedAt = DateTime.UtcNow.AddHours(-1) }, out _);
-        Assert.True(k.Ledger.TryReplace("t0", new IntakeRecord { Key = key, ClaimToken = "t1" }));
-        Assert.False(k.Ledger.TryReplace("t0", new IntakeRecord { Key = key, ClaimToken = "t2" }));
+        Assert.Equal(LedgerWriteResult.Updated, k.Ledger.TryUpdate(new IntakeRecord { Key = key, ClaimToken = "t1" }, "t0"));
+        Assert.Equal(LedgerWriteResult.LostOwnership, k.Ledger.TryUpdate(new IntakeRecord { Key = key, ClaimToken = "t2" }, "t0"));
+        Assert.Equal(LedgerWriteResult.NotFound, k.Ledger.TryUpdate(new IntakeRecord { Key = "no-such-key", ClaimToken = "t3" }, "t0"));
         Assert.Equal("t1", k.Ledger.Get(key)!.ClaimToken);
     }
 }

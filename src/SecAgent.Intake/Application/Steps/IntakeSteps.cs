@@ -57,10 +57,14 @@ public sealed class ParseStep(IFindingParserRegistry parsers) : IIntakeStep
 /// <list type="bullet">
 /// <item>accepted (run requested) → 200 duplicate for the same body, 409 for a different one;</item>
 /// <item>claimed and within the lease (another delivery is working on it) → 503 in_progress with Retry-After (409 for a different body);</item>
-/// <item>failed, or claimed but older than Intake:ClaimLeaseSeconds (that delivery crashed) → this delivery takes the claim over with a
-/// compare-and-swap on the claim token, so only one of several concurrent retries resumes it.</item>
+/// <item>failed, or claimed but older than Intake:ClaimLeaseSeconds (that delivery crashed or stalled) → this delivery takes the claim over
+/// with a compare-and-set on the claim token (<see cref="IIntakeLedger.TryUpdate"/>) and a new token, so only one of several concurrent
+/// retries resumes it, and the previous holder's later writes are fenced off;</item>
+/// <item>taken over Intake:MaxClaimTakeovers times already → marked failed for good (409, send a new run id) instead of being reclaimed
+/// forever; the token is replaced too, so a delivery still holding the old one cannot write.</item>
 /// </list>
-/// Writes after this point are idempotent (deterministic paths, write-once store, queue dedupe by MessageId).</summary>
+/// Writes after this point are fenced with the claim token (see <see cref="IntakePipeline"/>) and idempotent (deterministic paths,
+/// write-once store, queue dedupe by MessageId).</summary>
 public sealed class ClaimStep(IIntakeLedger ledger, IOptions<IntakeOptions> options, TimeProvider clock) : IIntakeStep
 {
     public int Order => IntakeStepOrder.Claim;
@@ -77,19 +81,36 @@ public sealed class ClaimStep(IIntakeLedger ledger, IOptions<IntakeOptions> opti
         {
             if (IntakeStatus.IsAccepted(existing.Status) || existing.BodySha256 != ctx.BodySha256)
                 return Task.FromResult<IntakeResult?>(IntakeResult.Duplicate(existing, ctx.BodySha256));
+            if (existing.Terminal)
+                return Task.FromResult<IntakeResult?>(IntakeResult.TakeoversExhausted(existing));
             var lease = TimeSpan.FromSeconds(options.Value.ClaimLeaseSeconds);
             var age = now - existing.UpdatedAt;
             if (existing.Status == IntakeStatus.Claimed && age <= lease)
                 return Task.FromResult<IntakeResult?>(IntakeResult.InProgress(existing, RetryAfter(lease - age)));
             var expected = existing.ClaimToken;
-            existing.Status = IntakeStatus.Claimed; existing.ClaimToken = NewToken(); existing.Detail = null;
+            if (existing.Takeovers >= options.Value.MaxClaimTakeovers)
+                return Task.FromResult<IntakeResult?>(Terminalize(existing, expected));
+            existing.Status = IntakeStatus.Claimed; existing.ClaimToken = NewToken(); existing.Detail = null; existing.Takeovers++;
             existing.Meta = ctx.Meta; existing.Findings = parsed.Findings.Count; existing.ScannerVersion = parsed.ToolVersion;
-            if (!ledger.TryReplace(expected, existing))
+            if (ledger.TryUpdate(existing, expected) != LedgerWriteResult.Updated)
                 return Task.FromResult<IntakeResult?>(IntakeResult.InProgress(existing, RetryAfter(TimeSpan.Zero)));
             record = existing;
         }
         ctx.Record = record;
+        ctx.ClaimToken = record.ClaimToken;
         return Task.FromResult<IntakeResult?>(null);
+    }
+
+    /// <summary>Lifetime ceiling reached: failed for good, under a fresh token nobody holds (fences off a stalled holder of the old one).</summary>
+    IntakeResult Terminalize(IntakeRecord existing, string expectedToken)
+    {
+        var lastFailure = existing.Status == IntakeStatus.Claimed ? "lease expired" : existing.Detail ?? "failed";
+        existing.Status = IntakeStatus.Failed; existing.Terminal = true; existing.ClaimToken = NewToken();
+        existing.Detail = $"gave up: the claim was taken over {existing.Takeovers} times (Intake:MaxClaimTakeovers = {options.Value.MaxClaimTakeovers}) " +
+            $"without a run being requested; last failure: {(lastFailure.Length <= 200 ? lastFailure : lastFailure[..200])}. Send a new run id to retry";
+        return ledger.TryUpdate(existing, expectedToken) == LedgerWriteResult.Updated
+            ? IntakeResult.TakeoversExhausted(existing)
+            : IntakeResult.InProgress(existing, RetryAfter(TimeSpan.Zero));
     }
 
     static string NewToken() => Guid.NewGuid().ToString("N");
@@ -133,15 +154,15 @@ public sealed class CanonicalFindingsStep(IRawFindingStore raw, IFindingSchemaVa
         var canonical = raw.Put($"{StoreRawStep.BasePath(ctx.Meta)}.canonical.json", Encoding.UTF8.GetBytes(JsonSerializer.Serialize(parsed.Findings, Schema.JsonIndented)));
         record.RawUri = rawRef.Uri; record.RawHash = rawRef.Hash; record.CanonicalUri = canonical.Uri;
         record.Detail = parsed.Notes.Count > 0 ? string.Join(" | ", parsed.Notes) : null;
-        ledger.Update(record);
-        return Task.FromResult<IntakeResult?>(null);
+        return Task.FromResult(ledger.TryUpdate(record, ctx.Require(ctx.ClaimToken, "claim token")) == LedgerWriteResult.Updated ? null : IntakeResult.ClaimLost(record));
     }
 
     static Guid StableId(string intakeId, string fingerprint, int i) =>
         new(SHA256.HashData(Encoding.UTF8.GetBytes($"{intakeId}|{fingerprint}|{i}")).AsSpan(0, 16));
 }
 
-/// <summary>Asks for a pipeline run (<see cref="IRunStarter"/> port), marks the record queued and returns 202.</summary>
+/// <summary>Asks for a pipeline run (<see cref="IRunStarter"/> port), marks the record queued (fenced write) and returns 202. The pipeline
+/// renews the claim right before this step, so a delivery whose claim was taken over never enqueues.</summary>
 public sealed class EnqueueRunStep(IRunStarter runs, IIntakeLedger ledger, ILogger<EnqueueRunStep> log) : IIntakeStep
 {
     public int Order => IntakeStepOrder.Enqueue;
@@ -154,7 +175,7 @@ public sealed class EnqueueRunStep(IRunStarter runs, IIntakeLedger ledger, ILogg
         var ticket = await runs.EnqueueAsync(new IntakeRunRequest(record.IntakeId, ctx.Key, m.Repo, m.PrNumber, m.Ref, m.HeadSha, m.Scanner, m.Mode, parsed.Findings.Count), ct);
         ctx.Ticket = ticket;
         record.Status = IntakeStatus.Queued; record.RunTicket = ticket.Ticket;
-        ledger.Update(record);
+        if (ledger.TryUpdate(record, ctx.Require(ctx.ClaimToken, "claim token")) != LedgerWriteResult.Updated) return IntakeResult.ClaimLost(record);
         log.LogInformation("intake {IntakeId} via {Via}: {Repo}@{Sha} {Scanner} ({Format}) → {Findings} findings, queued {Ticket}",
             record.IntakeId, ctx.Via, m.Repo, m.HeadSha[..7], m.Scanner, m.Format, parsed.Findings.Count, ticket.Ticket);
         return new IntakeResult(202, new
