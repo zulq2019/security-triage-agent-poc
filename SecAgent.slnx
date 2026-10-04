@@ -1,8 +1,11 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/SecAgent.Abstractions/SecAgent.Abstractions.csproj" />
     <Project Path="src/SecAgent.Agents/SecAgent.Agents.csproj" />
     <Project Path="src/SecAgent.Core/SecAgent.Core.csproj" />
     <Project Path="src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+    <Project Path="src/SecAgent.Intake/SecAgent.Intake.csproj" />
+    <Project Path="src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SecAgent.Tests/SecAgent.Tests.csproj" />
