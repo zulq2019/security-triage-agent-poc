@@ -36,7 +36,7 @@ static class RoleServices
 /// orchestrator's job, so this refuses.</summary>
 sealed class RefusingPrRunLauncher : IPrRunLauncher
 {
-    public Task<Guid> StartPrRunAsync(string repo, int prNumber, CancellationToken ct) =>
+    public Task<PrRunStart> StartPrRunAsync(string repo, int prNumber, string? expectedHeadSha, CancellationToken ct) =>
         throw new InvalidOperationException("this agent does not start runs (the orchestrator consumes the run queue)");
 }
 

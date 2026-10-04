@@ -31,6 +31,7 @@ internal sealed class IntakeOptionsValidator(IServiceProviderIsKeyedService keye
         Check(o.MaxResults is > 0 and <= 1_000_000, "Intake:MaxResults must be 1..1000000");
         Check(o.MaxJsonDepth is >= 8 and <= 256, "Intake:MaxJsonDepth must be 8..256");
         Check(o.ClaimLeaseSeconds is >= 5 and <= 3600, "Intake:ClaimLeaseSeconds must be 5..3600");
+        Check(o.MaxClaimTakeovers is >= 1 and <= 100, "Intake:MaxClaimTakeovers must be 1..100");
         Check(o.AllowedScanners.Count > 0, "Intake:AllowedScanners must not be empty");
         Check(o.AllowedScanners.All(s => s.Length is > 0 and <= 40 && s.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_')),
             "Intake:AllowedScanners entries must be scanner ids (letters, digits, - and _; max 40)");
