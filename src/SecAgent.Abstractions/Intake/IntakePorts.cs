@@ -50,6 +50,25 @@ public interface IIntakeRecordQuery
     IEnumerable<IntakeRecord> All();
 }
 
+/// <summary>Shared naming convention for the run queue, used by every adapter and mirrored by the infrastructure (infra/agents.bicep
+/// creates <c>runs</c> with sessions on; deploy/agents.json lists it for the intake, agent-api and orchestrator).
+/// <para>Session = the run target (repository + PR, or repository + ref), so requests for one PR are handed out in order, one at a
+/// time. The same key is used whether or not the broker enforces sessions (sessionless deployments simply ignore it).</para></summary>
+public static class RunQueueConvention
+{
+    /// <summary>Queue name for run requests, locally and in Service Bus.</summary>
+    public const string QueueName = "runs";
+    /// <summary>Service Bus limit for SessionId.</summary>
+    public const int MaxSessionIdLength = 128;
+
+    /// <summary>"owner/repo#12" for a PR, "owner/repo@refs/heads/main" for a ref; hashed when longer than the broker allows.</summary>
+    public static string SessionId(IntakeRunRequest request)
+    {
+        var key = request.PrNumber is int pr ? $"{request.Repo}#{pr}" : $"{request.Repo}@{request.Ref ?? request.HeadSha}";
+        return key.Length <= MaxSessionIdLength ? key : "sha256:" + Hashing.Sha256(key)[..32];
+    }
+}
+
 /// <summary>Producer side of the run queue: asks for a pipeline run for an accepted intake.</summary>
 public interface IRunStarter
 {

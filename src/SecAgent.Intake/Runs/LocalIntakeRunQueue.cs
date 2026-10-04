@@ -3,11 +3,11 @@ using SecAgent.Core;
 
 namespace SecAgent.Intake.Runs;
 
-/// <summary>Local adapter for both sides of the run queue over the pipeline's <see cref="IMessageQueue"/> (InProcessQueue), queue "intake-runs".
+/// <summary>Local adapter for both sides of the run queue over the pipeline's <see cref="IMessageQueue"/> (InProcessQueue), queue <see cref="RunQueueConvention.QueueName"/> ("runs", the same name as in Service Bus).
 /// MessageId = idempotency key, so duplicate detection drops a second copy (as Service Bus does with duplicate detection on).</summary>
 public sealed class LocalIntakeRunQueue(IMessageQueue queue) : IRunStarter, IIntakeRunSource
 {
-    public const string QueueName = "intake-runs";
+    public const string QueueName = RunQueueConvention.QueueName;
 
     public Task<RunTicket> EnqueueAsync(IntakeRunRequest request, CancellationToken ct)
     {
