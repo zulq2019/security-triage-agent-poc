@@ -99,7 +99,9 @@ default role.
 
 Rules every image follows:
 
-- Multi-stage build. Restore is cached on the project files, and BuildKit cache mounts are used for NuGet. Release binaries only.
+- Multi-stage build. Restore is cached on the project files; the restored packages are kept in that layer (not in a BuildKit cache
+  mount, which is empty on a fresh CI runner even when the layer comes from the GHA cache). Only the NuGet HTTP cache is a cache
+  mount. Release binaries only.
 - Base images are pinned by digest. Tool binaries are pinned by version **and** sha256 (amd64 and arm64). There are no `curl | sh` install
   scripts and no `latest` tags.
 - gitleaks is built from its pinned, checksummed v8.30.1 source with Go 1.26.8 and current `golang.org/x/crypto` / `x/text`. The

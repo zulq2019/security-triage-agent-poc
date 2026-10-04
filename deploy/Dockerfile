@@ -19,8 +19,12 @@ ARG GO_IMAGE=golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc78
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # Build: restore (cached layer, only project files), then publish each host in its own stage so a target builds only what it needs.
+# The restored packages live IN the restore layer (NUGET_PACKAGES), not in a cache mount: CI restores layers from the GHA cache on a
+# fresh runner where cache mounts are empty, so a cached restore layer + `publish --no-restore` would find no packages (NETSDK1064).
+# Only NuGet's HTTP download cache is a cache mount (speeds up re-restores locally; safe to be empty).
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM ${SDK_IMAGE} AS build
+ENV NUGET_PACKAGES=/nuget/packages
 WORKDIR /src
 COPY Directory.Build.props SecAgent.slnx ./
 COPY src/SecAgent.Core/SecAgent.Core.csproj src/SecAgent.Core/
@@ -32,18 +36,16 @@ COPY src/SecAgent.Hosting/SecAgent.Hosting.csproj src/SecAgent.Hosting/
 COPY src/SecAgent.Hosting.Azure/SecAgent.Hosting.Azure.csproj src/SecAgent.Hosting.Azure/
 COPY src/SecAgent.Worker/SecAgent.Worker.csproj src/SecAgent.Worker/
 COPY src/SecAgent.Dashboard/SecAgent.Dashboard.csproj src/SecAgent.Dashboard/
-RUN --mount=type=cache,id=secagent-nuget,target=/root/.nuget/packages \
+RUN --mount=type=cache,id=secagent-nuget-http,target=/root/.local/share/NuGet/http-cache \
     dotnet restore src/SecAgent.Worker/SecAgent.Worker.csproj \
  && dotnet restore src/SecAgent.Dashboard/SecAgent.Dashboard.csproj
 COPY src/ src/
 
 FROM build AS publish-worker
-RUN --mount=type=cache,id=secagent-nuget,target=/root/.nuget/packages \
-    dotnet publish src/SecAgent.Worker/SecAgent.Worker.csproj -c Release -o /out --no-restore -p:UseAppHost=false
+RUN dotnet publish src/SecAgent.Worker/SecAgent.Worker.csproj -c Release -o /out --no-restore -p:UseAppHost=false
 
 FROM build AS publish-dashboard
-RUN --mount=type=cache,id=secagent-nuget,target=/root/.nuget/packages \
-    dotnet publish src/SecAgent.Dashboard/SecAgent.Dashboard.csproj -c Release -o /out --no-restore -p:UseAppHost=false
+RUN dotnet publish src/SecAgent.Dashboard/SecAgent.Dashboard.csproj -c Release -o /out --no-restore -p:UseAppHost=false
 
 # Read-only content the hosts load at run time: rules-as-code, DB schema, the agent catalogue, dashboard settings + static UI.
 FROM ${SDK_IMAGE} AS content
