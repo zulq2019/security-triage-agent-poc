@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Model provider connector for OpenAI-compatible endpoints: Ollama (local), OpenAI and Azure OpenAI (v1 API). This is the POC's
+       ollama / openai / azureopenai switch, moved behind IModelProviderClient. Calls go through a Microsoft Agent Framework ChatClientAgent
+       with JSON-schema structured output; token usage comes back on every response. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.23.0" />
+  </ItemGroup>
+</Project>

@@ -4,8 +4,26 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/SecAgent.Agents/SecAgent.Agents.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Intake/SecAgent.Intake.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj" />
+    <ProjectReference Include="../../src/SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Fixtures/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

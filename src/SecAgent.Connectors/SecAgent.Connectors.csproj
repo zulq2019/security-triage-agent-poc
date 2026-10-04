@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Connector runtime: options + validation, per-tenant connection resolution, secret provider (scheme routing), plug-in catalogue,
+       typed client factory, decorators (auditing, call-level resilience) and the HTTP base for REST connectors (named HttpClient +
+       Microsoft.Extensions.Http.Resilience). Depends on the connector abstractions only; no connector implementation, no pipeline. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors.Abstractions/SecAgent.Connectors.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.10.0" />
+    <PackageReference Include="Polly.RateLimiting" Version="8.8.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.12" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SecAgent.Tests" />
+  </ItemGroup>
+</Project>
