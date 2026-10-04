@@ -15,6 +15,7 @@ var defaultAgents agentSpec[] = [
     sends: ['runs']
     blobWrite: ['raw']
     keyVault: true
+    hostsIntake: true
   }
   {
     name: 'agent-api'
@@ -38,6 +39,7 @@ var defaultAgents agentSpec[] = [
     blobRead: ['raw', 'evidence', 'context']
     keyVault: true
     sql: 'writer'
+    hostsIntake: true
   }
   {
     name: 'scanner'
@@ -130,6 +132,10 @@ var blobLayout = [
   { purpose: 'context', perTenant: true, immutable: false }
   { purpose: 'exports', perTenant: false, immutable: false }
 ]
+
+@export()
+@description('Run request queue: RunQueueConvention.QueueName in SecAgent.Abstractions. Always session-enabled (SessionId = run target).')
+var runQueue = 'runs'
 
 @export()
 @description('Name of the run progress topic.')

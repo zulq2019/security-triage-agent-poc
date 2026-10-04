@@ -186,15 +186,22 @@ server needs no directory-read permission) and adds it to `secagent_reader`, `se
 `APPLICATIONINSIGHTS_CONNECTION_STRING`; plus `SECAGENT_SQL` (passwordless connection string,
 `Authentication=Active Directory Managed Identity`) for apps with a SQL role, and `SECAGENT_MODEL_PROVIDER`,
 `SECAGENT_MODEL_BASE_URL`, `SECAGENT_SMALL_MODEL`, `SECAGENT_STRONG_MODEL` for model apps when a model endpoint
-is configured. Secrets (for example `SECAGENT_HMAC_KEY`) are added as **Key Vault references** with
+is configured. Agents with `hostsIntake: true` in the catalogue (intake, orchestrator) also get the settings the
+intake code binds (`Intake` / `Intake:Azure` sections): `Intake__Adapters__RunQueue=azure-servicebus`,
+`Intake__Azure__ServiceBusNamespace`, `Intake__Azure__RunQueueName=runs`, and in a single-tenant deployment
+`Intake__Adapters__RawStore` / `Intake__Adapters__BlobReader=azure-blob`, `Intake__Azure__BlobServiceUri` and
+`Intake__Azure__RawContainer=raw` (the POC intake is not tenant-aware yet, so a multi-tenant deployment keeps its local
+raw store for now). Secrets (for example `SECAGENT_HMAC_KEY`, and on the intake `SECAGENT_INTAKE_HMAC_SECRET` /
+`SECAGENT_INTAKE_ADMIN_TOKEN`) are added as **Key Vault references** with
 `agentOverrides.<agent>.keyVaultReferences` once the secret exists in the vault. A reference reads the platform vault
 by default; add `tenant: '<code>'` to read that tenant's vault instead (an unknown tenant code fails the deployment).
 In a multi-tenant deployment, apps with Key Vault access also get `SECAGENT_TENANT_KEYVAULT_URIS`, a JSON object
 `{ "<tenant>": "https://kv-<tenant>-….vault.azure.net/" }`, so connector secret references (`kv:<vault url>/secrets/<name>`)
 can point at the tenant's own vault without copying tokens into the shared platform vault (output `tenantKeyVaultUris`).
 
-> The POC code today reads `SECAGENT_SQL`, `SECAGENT_HMAC_KEY` and the `SECAGENT_MODEL_*` variables. The other
-> names are a proposed contract for the Service Bus / Blob / Key Vault adapters that the code does not have yet.
+> The POC code today reads `SECAGENT_SQL`, `SECAGENT_HMAC_KEY`, the `SECAGENT_MODEL_*` variables, the intake secrets
+> `SECAGENT_INTAKE_HMAC_SECRET` / `SECAGENT_INTAKE_ADMIN_TOKEN` and the `Intake__*` settings above. The other `SECAGENT_*`
+> names are a proposed contract for adapters that the code does not have yet.
 
 ## Files
 
@@ -280,7 +287,9 @@ export SECAGENT_KV_OPERATORS_GROUP_ID=<object id of the Key Vault operators grou
    (`sqlcmd -G`).
 2. **Secrets:** a member of the Key Vault operators group sets secret values (HMAC key, GitHub App key, webhook
    signing secret, Black Duck / Jira tokens per tenant). Then list them per agent in `agentOverrides`, for
-   example `{ orchestrator: { keyVaultReferences: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ] } }`, and
+   example `{ orchestrator: { keyVaultReferences: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ] } }`
+   and, for the intake, `SECAGENT_INTAKE_HMAC_SECRET` → `intake-hmac-secret` and `SECAGENT_INTAKE_ADMIN_TOKEN` →
+   `intake-admin-token` (examples in the `.bicepparam` files), and
    redeploy. A Container App fails to start if a referenced secret does not exist yet, which is why this is a
    second step.
 3. **Images:** the first deployment uses a public placeholder image (`usePlaceholderImages = true`) because the
@@ -384,7 +393,8 @@ moves the bill, roughly in order of likely impact:
 - **Sessions:** every queue requires sessions (SessionId = run id). On `runs`, which carries run *requests*, the
   intake (PR #2, `RunQueueConvention`) sends SessionId = the run target (`owner/repo#<pr>` or `owner/repo@<ref>`), so
   one PR's requests are handed out in order. Decision OD-03 may make `triage` sessionless (`sessionlessQueues`
-  parameter); if `runs` is ever made sessionless, set `Intake__Azure__RunQueueRequiresSession=false` on the intake and orchestrator. Values marked `[to agree]` in SDD 7.4 (max delivery count, TTL,
+  parameter); `runs` always keeps sessions (main.bicep ignores it in `sessionlessQueues`), matching the intake's
+  default `Intake:Azure:RunQueueRequiresSession=true`. Values marked `[to agree]` in SDD 7.4 (max delivery count, TTL,
   lock duration, duplicate window) are parameters with the POC defaults.
 - **Code changes needed before real images run:** Service Bus / Blob / Key Vault adapters behind the existing
   interfaces (`IMessageQueue`, blob store), and managed-identity (token) auth for the `azureopenai` provider,

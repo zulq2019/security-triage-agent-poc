@@ -68,6 +68,9 @@ type agentSpec = {
 
   @description('Azure SQL database role.')
   sql: sqlRole?
+
+  @description('Runs the SecAgent.Intake composition (webhook endpoint and/or run dispatcher): gets the Intake__Adapters__* / Intake__Azure__* settings for the Blob and Service Bus adapters.')
+  hostsIntake: bool?
 }
 
 @export()

@@ -51,7 +51,14 @@ param createContainerRegistry = true
 param containerRegistrySku = 'Premium'
 param usePlaceholderImages = true
 param agentOverrides = {
-  intake: { allowedSourceRanges: [] } // the customer's GitHub / CI egress ranges [to confirm]
+  intake: {
+    allowedSourceRanges: [] // the customer's GitHub / CI egress ranges [to confirm]
+    // Add once the secrets exist in the vault (second deployment):
+    // keyVaultReferences: [
+    //   { envName: 'SECAGENT_INTAKE_HMAC_SECRET', secretName: 'intake-hmac-secret' }
+    //   { envName: 'SECAGENT_INTAKE_ADMIN_TOKEN', secretName: 'intake-admin-token' }
+    // ]
+  }
 }
 
 // Customer extensions (SDD 20): extra agents, for example an in-house fixer on its own queue. Because the

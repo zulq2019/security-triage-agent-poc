@@ -60,7 +60,11 @@ param usePlaceholderImages = true // set false once CI pushes images; pin digest
 param agentOverrides = {
   intake: {
     allowedSourceRanges: [] // GitHub "hooks" CIDRs from https://api.github.com/meta [to confirm]
-    // keyVaultReferences: [ { envName: 'SECAGENT_WEBHOOK_SECRET', secretName: 'github-webhook-secret' } ]
+    // Names read by the intake (IntakeOptions.HmacSecretEnv / AdminTokenEnv). Add once the secrets exist in the vault (second deployment).
+    // keyVaultReferences: [
+    //   { envName: 'SECAGENT_INTAKE_HMAC_SECRET', secretName: 'intake-hmac-secret' }
+    //   { envName: 'SECAGENT_INTAKE_ADMIN_TOKEN', secretName: 'intake-admin-token' }
+    // ]
   }
   orchestrator: {
     // keyVaultReferences: [ { envName: 'SECAGENT_HMAC_KEY', secretName: 'secagent-hmac-key' } ]

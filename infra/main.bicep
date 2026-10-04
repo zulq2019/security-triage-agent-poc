@@ -22,7 +22,7 @@ import {
   sqlEntraAdmin as sqlEntraAdminType
   sqlSku
 } from 'types.bicep'
-import { blobLayout, defaultAgents, runEventsTopic } from 'agents.bicep'
+import { blobLayout, defaultAgents, runEventsTopic, runQueue } from 'agents.bicep'
 
 // ---------------------------------------------------------------------------------------------------------------
 // Core
@@ -156,7 +156,7 @@ param serviceBusSku string = 'Standard'
 @allowed([1, 2, 4, 8, 16])
 param serviceBusMessagingUnits int = 1
 
-@description('Queues created WITHOUT sessions (decision OD-03, for example [ triage ]). All others use SessionId = run id.')
+@description('Queues created WITHOUT sessions (decision OD-03, for example [ triage ]). All others use SessionId = run id. The run queue (runs) always keeps sessions: the intake relies on per-PR ordering.')
 param sessionlessQueues string[] = []
 
 @description('Extra run-events subscriptions nobody in the agent list consumes yet (for example notifier).')
@@ -292,6 +292,7 @@ var agents = map(concat(defaultAgents, additionalAgents), a => {
   keyVault: a.?keyVault ?? false
   model: a.?model ?? false
   sql: a.?sql ?? 'none'
+  hostsIntake: a.?hostsIntake ?? false
   minReplicas: agentOverrides[?a.name].?minReplicas ?? ((a.?alwaysOn ?? false) ? alwaysOnMinReplicas : 0)
   maxReplicas: agentOverrides[?a.name].?maxReplicas ?? ((a.?alwaysOn ?? false) ? alwaysOnMaxReplicas : workerMaxReplicas)
   image: agentOverrides[?a.name].?image ?? ''
@@ -303,7 +304,7 @@ var agents = map(concat(defaultAgents, additionalAgents), a => {
 var dispatchQueues = flatten(map(filter(agents, a => !a.dispatchesWork), a => a.consumes))
 var agentSends = map(agents, a => union(a.sends, a.dispatchesWork ? dispatchQueues : []))
 var queueNames = union(flatten(map(agents, a => a.consumes)), flatten(agentSends))
-var queues = map(queueNames, q => { name: q, requiresSession: !contains(sessionlessQueues, q) })
+var queues = map(queueNames, q => { name: q, requiresSession: q == runQueue || !contains(sessionlessQueues, q) })
 var topicSubscriptions = union(flatten(map(agents, a => a.subscribes)), extraTopicSubscriptions)
 
 // Tenancy: per-tenant vaults and containers when tenants are listed.
@@ -637,6 +638,24 @@ var strongModel = deployOpenAi
   ? (length(openAiDeployments) > 1 ? openAiDeployments[1].name : smallModel)
   : existingModelNames.strong
 var platformVault = keyVaults.outputs.vaults[0]
+// Settings read by SecAgent.Intake (IntakeOptions "Intake" / AzureIntakeOptions "Intake:Azure") in the apps that host it. The run queue
+// always goes to Service Bus. Raw payloads go to the Blob container 'raw' in a single-tenant deployment; the POC intake writes one
+// container and is not tenant-aware yet, so a multi-tenant deployment (raw-<tenant> containers only) keeps its local raw store for now.
+var intakeEnv = concat(
+  [
+    { name: 'Intake__Adapters__RunQueue', value: 'azure-servicebus' }
+    { name: 'Intake__Azure__ServiceBusNamespace', value: serviceBus.outputs.fullyQualifiedNamespace }
+    { name: 'Intake__Azure__RunQueueName', value: runQueue }
+  ],
+  empty(tenants)
+    ? [
+        { name: 'Intake__Adapters__RawStore', value: 'azure-blob' }
+        { name: 'Intake__Adapters__BlobReader', value: 'azure-blob' }
+        { name: 'Intake__Azure__BlobServiceUri', value: storage.outputs.blobEndpoint }
+        { name: 'Intake__Azure__RawContainer', value: 'raw' }
+      ]
+    : []
+)
 // Tenant code -> vault URI (vaultSpecs puts the platform vault first, then one vault per tenant in parameter order).
 // Exposed to the apps that read Key Vault, so per-tenant connector secrets stay in the tenant's vault.
 var tenantVaultUris = toObject(range(0, length(tenants)), i => tenants[i], i => keyVaults.outputs.vaults[i + 1].uri)
@@ -702,7 +721,8 @@ module containerApps 'modules/containerapp.bicep' = [
               { name: 'SECAGENT_SMALL_MODEL', value: smallModel }
               { name: 'SECAGENT_STRONG_MODEL', value: strongModel }
             ]
-          : []
+          : [],
+        a.hostsIntake ? intakeEnv : []
       )
       keyVaultSecrets: map(a.keyVaultReferences, s => {
         envName: s.envName

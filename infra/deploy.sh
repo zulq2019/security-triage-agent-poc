@@ -108,8 +108,11 @@ Next steps (manual, see docs/infra.md "After the first deployment"):
        sqlcmd -S ${SQL_FQDN} -d ${SQL_DB} -G -i out/${NAME}.sql-grants.sql
   2. Secrets - set values in ${KV_URI} (never in git), e.g.:
        az keyvault secret set --vault-name <vault> --name secagent-hmac-key --value "\$(openssl rand -base64 48)"
+       az keyvault secret set --vault-name <vault> --name intake-hmac-secret --value "\$(openssl rand -hex 32)"
+       az keyvault secret set --vault-name <vault> --name intake-admin-token --value "\$(openssl rand -hex 32)"
      then reference them per agent with agentOverrides.<agent>.keyVaultReferences and redeploy.
   3. Images - push <workload>-<agent> images to the registry, set usePlaceholderImages = false (pin digests with
      agentOverrides.<agent>.image) and run this script again.
-  4. Webhook - point the GitHub / SARIF webhook at ${INTAKE} (signature secret in Key Vault).
+  4. Webhook - point the GitHub / SARIF webhook at ${INTAKE} (HMAC secret: intake-hmac-secret, referenced as
+     SECAGENT_INTAKE_HMAC_SECRET on the intake; same value as the GitHub secret INTAKE_HMAC_SECRET).
 NEXT
