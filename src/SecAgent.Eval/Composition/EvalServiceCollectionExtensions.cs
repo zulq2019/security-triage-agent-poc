@@ -75,7 +75,8 @@ public static class EvalServiceCollectionExtensions
 
         // Baseline, gates, reports
         services.AddSingleton<IBaselineStore, FileBaselineStore>();
-        services.AddGateRule<MinPassRateGate>().AddGateRule<NoRegressionGate>().AddGateRule<MaxUnsafeOutcomesGate>().AddGateRule<MaxErrorsGate>();
+        services.AddGateRule<MinPassRateGate>().AddGateRule<NoRegressionGate>().AddGateRule<MaxUnsafeOutcomesGate>().AddGateRule<MaxErrorsGate>()
+            .AddGateRule<MaxPromptDriftGate>();
         services.AddSingleton<IGateEvaluator, GateEvaluator>();
         services.AddReportWriter<JsonReportWriter>().AddReportWriter<MarkdownReportWriter>();
         services.AddSingleton<IEvalRunner, EvalRunner>();

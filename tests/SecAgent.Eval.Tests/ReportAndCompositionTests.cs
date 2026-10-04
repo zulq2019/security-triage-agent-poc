@@ -88,7 +88,7 @@ public class CompositionTests
         Assert.IsType<ReplayModelClient>(sp.GetRequiredService<IEvalModelClient>());
         Assert.Equal(16, sp.GetServices<IOutcomeChecker>().Count());
         Assert.Equal(4, sp.GetServices<IEvalFixer>().Count());
-        Assert.Equal(4, sp.GetServices<IGateRule>().Count());
+        Assert.Equal(5, sp.GetServices<IGateRule>().Count());   // pass rate, regression, unsafe, errors, prompt drift
         Assert.Equal(2, sp.GetServices<IReportWriter>().Count());
     }
 

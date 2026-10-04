@@ -25,7 +25,8 @@ public sealed class ModelStep(ContextAssembler assembler, IEvalModelClient model
         if (a.Pack.OverBudget) throw new OverBudgetPackException($"required context {a.Pack.TokenTotal} > budget {a.Pack.TokenBudget} for {agentId}");
         lock (ctx) { ctx.Prompts.Add(a.Pack.SystemText + "\n" + a.Pack.UserText); ctx.InjectionHits.AddRange(a.InjectionHits); }
         var reply = await model.CompleteAsync(new ModelRequest(ctx.Case, step, agentId, taskType, schemaName, severity, a.Pack.SystemText, a.Pack.UserText), ct);
-        lock (ctx) { ctx.Usage.Add(reply.Usage); ctx.ModelOutputs.Add(masker.Mask(reply.Json.GetRawText(), false)); }
+        lock (ctx) ctx.Usage.Add(reply.Usage);
+        ctx.RecordModelOutput(reply.Json.GetRawText(), masker);   // leak verdict on the raw response, masked copy retained
         var error = validator.Validate(schemaName, reply.Json);
         if (error != null) throw new SchemaInvalidException($"{step}: model output failed schema '{schemaName}': {error}");
         return new ModelStepResult(reply.Json, a.Pack);

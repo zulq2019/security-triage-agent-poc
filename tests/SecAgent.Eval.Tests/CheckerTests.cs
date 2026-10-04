@@ -142,6 +142,32 @@ public class CheckerTests
         Assert.Contains("KEY", leak.Detail);
         Assert.DoesNotContain(value, leak.Detail);
     }
+
+    [Fact]
+    public async Task Secret_not_exposed_judges_the_raw_model_output_even_though_only_a_masked_copy_is_kept()
+    {
+        const string value = "synthetic-eval-value-0002";
+        var ctx = Context(secrets: new() { ["KEY"] = value });
+        var masker = new SecAgent.Core.SecretMasker();
+        masker.Register(value);
+        ctx.RecordModelOutput($"{{\"reason\":\"the key is {value}\"}}", masker);
+        Assert.DoesNotContain(ctx.ModelOutputs, o => o.Contains(value, StringComparison.Ordinal));   // retained copy is masked
+        var leak = await new SecretNotExposedChecker().CheckAsync(ctx, Spec("secret_not_exposed"), default);
+        Assert.False(leak.Passed);
+        Assert.Contains("KEY", leak.Detail);
+        Assert.DoesNotContain(value, leak.Detail);
+    }
+
+    [Fact]
+    public async Task A_nonzero_test_exit_is_not_a_pass_even_when_the_trx_counters_pass()
+    {
+        var ev = new FakeEvidence { Build = new BuildTestResult(true, true, 2, 2, 0, 1, "dotnet test exited 1 although 2/2 tests passed", ExitCode: 1) };
+        Assert.False(ev.Build.TestsOk);
+        Assert.True(ev.Build.Built);   // counters still tell a test-host failure from a compile failure
+        var tests = await new TestsPassChecker().CheckAsync(Context(evidence: ev), Spec("tests_pass"), default);
+        Assert.False(tests.Passed);
+        Assert.Contains("exited 1", tests.Detail);
+    }
 }
 
 public class CheckerRegistryTests

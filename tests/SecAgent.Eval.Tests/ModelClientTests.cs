@@ -82,3 +82,25 @@ public class ReplayModelClientTests
         Assert.Matches("^[0-9a-f]{64}$", Req(c).PromptSha256);
     }
 }
+
+public class LiveModelClientTests
+{
+    [Fact]
+    public void Live_mode_offers_the_whole_tier_primary_first_and_fails_over_only_on_transport_errors()
+    {
+        var cfg = SecAgent.Core.ConfigSnapshot.Load(RulesRoot);
+        var live = new LiveModelClient(cfg, new SecAgent.Agents.SchemaValidator(cfg, new SecAgent.Agents.JsonSchemaCache()), TimeProvider.System);
+        var candidates = live.Candidates("triage", null);
+        Assert.True(candidates.Count > 1, "rules/gateway/models.yaml lists a fallback deployment per tier");
+        Assert.False(candidates[0].Fallback);
+        Assert.Contains(candidates.Skip(1), d => d.Fallback);
+        Assert.Equal(candidates[0], live.Choose("triage", null));
+
+        Assert.True(LiveModelClient.IsTransient(new HttpRequestException("synthetic"), default));
+        Assert.True(LiveModelClient.IsTransient(new TimeoutException(), default));
+        Assert.True(LiveModelClient.IsTransient(new TaskCanceledException(), default));             // provider timeout, not our cancellation
+        Assert.False(LiveModelClient.IsTransient(new TaskCanceledException(), new CancellationToken(true)));
+        Assert.False(LiveModelClient.IsTransient(new SecAgent.Agents.Llm.SchemaInvalidException("bad output"), default));
+        Assert.False(LiveModelClient.IsTransient(new SecAgent.Agents.Llm.ModelUnavailableException("API key env var not set"), default));
+    }
+}

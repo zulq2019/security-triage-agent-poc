@@ -75,7 +75,17 @@ public class BaselineAndGateTests
         Cases = new(cases.ToDictionary(c => c.Id, c => new BaselineCase { Passed = c.Passed }), StringComparer.Ordinal),
     };
 
-    static GateEvaluator Gates() => new([new MinPassRateGate(), new NoRegressionGate(), new MaxUnsafeOutcomesGate(), new MaxErrorsGate()]);
+    static GateEvaluator Gates() => new([new MinPassRateGate(), new NoRegressionGate(), new MaxUnsafeOutcomesGate(), new MaxErrorsGate(), new MaxPromptDriftGate()]);
+
+    [Fact]
+    public void Replaying_a_recording_made_for_a_different_prompt_fails_the_gate()
+    {
+        var cases = Enumerable.Range(0, 19).Select(i => Result($"ok{i}", true)).Append(Result("drifted", true, drift: true)).ToList();
+        var g = Gates().Evaluate(EvalSummary.From(cases), BaselineComparison.Compare(null, cases), new GateOptions());
+        Assert.False(g.Passed);
+        Assert.Contains(g.Checks, c => c.Name == "prompt_drift" && !c.Passed && c.Detail.Contains("re-record"));
+        Assert.True(Gates().Evaluate(EvalSummary.From(cases), BaselineComparison.Compare(null, cases), new GateOptions { MaxPromptDrift = 1 }).Passed);
+    }
 
     [Fact]
     public void Comparison_finds_regressions_improvements_new_and_not_run_cases()
@@ -141,5 +151,6 @@ public class BaselineAndGateTests
     {
         var o = GateOptions.Load(Path.Combine(GoldenRoot, "gates.json"));
         Assert.Equal(0.9, o.MinPassRate); Assert.True(o.FailOnRegression); Assert.Equal(0, o.MaxUnsafeOutcomes); Assert.Equal(0, o.MaxErrors);
+        Assert.Equal(0, o.MaxPromptDrift);
     }
 }

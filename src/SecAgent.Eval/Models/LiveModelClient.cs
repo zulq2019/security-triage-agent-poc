@@ -19,7 +19,11 @@ public sealed class LiveModelClient(ConfigSnapshot cfg, SchemaValidator validato
 
     public string Mode => "live";
 
-    public DeploymentConfig Choose(string taskType, string? severity)
+    /// <summary>First choice for the task (primary deployment of its tier).</summary>
+    public DeploymentConfig Choose(string taskType, string? severity) => Candidates(taskType, severity)[0];
+
+    /// <summary>The tier's deployments, primary first then fallbacks: the order ModelGateway.CallAsync fails over in.</summary>
+    public IReadOnlyList<DeploymentConfig> Candidates(string taskType, string? severity)
     {
         var g = cfg.Gateway;
         var tier = g.TaskTiers.GetValueOrDefault(taskType, "small");
@@ -28,7 +32,7 @@ public sealed class LiveModelClient(ConfigSnapshot cfg, SchemaValidator validato
             var i = g.TierOrder.IndexOf(tier);
             if (i >= 0 && i < g.TierOrder.Count - 1) tier = g.TierOrder[i + 1];
         }
-        return g.Tiers[tier].OrderBy(d => d.Fallback).First();
+        return g.Tiers[tier].OrderBy(d => d.Fallback).ToList();
     }
 
     IChatClient Client(DeploymentConfig d)
@@ -51,9 +55,30 @@ public sealed class LiveModelClient(ConfigSnapshot cfg, SchemaValidator validato
         }
     }
 
+    /// <summary>Tries the tier's deployments in order and fails over on transport errors (no response, timeout, 408/429/5xx), as the
+    /// production gateway does. Schema failures and configuration errors are not failed over.</summary>
     public async Task<ModelReply> CompleteAsync(ModelRequest r, CancellationToken ct)
     {
-        var d = Choose(r.TaskType, r.Severity);
+        Exception? last = null;
+        foreach (var d in Candidates(r.TaskType, r.Severity))
+        {
+            try { return await CompleteWithAsync(d, r, ct); }
+            catch (Exception e) when (IsTransient(e, ct)) { last = e; }
+        }
+        throw new ModelUnavailableException($"All deployments failed: {last?.GetType().Name} {last?.Message}");
+    }
+
+    /// <summary>Errors a different deployment may not have (exposed for tests).</summary>
+    public static bool IsTransient(Exception e, CancellationToken ct) => e switch
+    {
+        ClientResultException c => c.Status is 0 or 408 or 429 or >= 500,
+        HttpRequestException or IOException or TimeoutException => true,
+        TaskCanceledException => !ct.IsCancellationRequested,
+        _ => false,
+    };
+
+    async Task<ModelReply> CompleteWithAsync(DeploymentConfig d, ModelRequest r, CancellationToken ct)
+    {
         var schema = validator.SchemaElement(r.SchemaName);
         AIAgent agent = new ChatClientAgent(Client(d), new ChatClientAgentOptions
         {

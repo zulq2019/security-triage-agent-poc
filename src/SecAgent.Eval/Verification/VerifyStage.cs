@@ -27,7 +27,7 @@ public sealed class VerifyStage : IVerifyStage
         if (!targetGone) reasons.Add($"target {target!.Rule} still detected in {target.File}");
         if (introduced.Count > 0) reasons.Add($"new findings: {string.Join("; ", introduced.Select(h => $"{h.RuleId} {h.File}:{h.Line}"))}");
         if (!build.Built) reasons.Add("build failed: " + build.FailureText);
-        else if (!build.TestsOk) reasons.Add($"{build.Failed} test(s) failed of {build.Total}: {build.FailureText}");
+        else if (!build.TestsOk) reasons.Add(build.Failed > 0 || build.ExitCode == 0 ? $"{build.Failed} test(s) failed of {build.Total}: {build.FailureText}" : "tests: " + build.FailureText);
         var passed = targetGone && introduced.Count == 0 && build.TestsOk;
         return new VerifyResult(passed, targetGone, introduced, build, reasons);
     }

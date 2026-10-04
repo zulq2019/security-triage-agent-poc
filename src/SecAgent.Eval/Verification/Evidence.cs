@@ -7,9 +7,11 @@ using SecAgent.Eval.Workspace;
 namespace SecAgent.Eval.Verification;
 
 /// <summary>Result of building the fixture and running its tests (dotnet test when it has a test project, else dotnet build).</summary>
-public sealed record BuildTestResult(bool Built, bool HasTests, int Total, int Passed, int Failed, double Seconds, string FailureText)
+/// <param name="Built">Compiled (for dotnet test: non-zero exit with no tests run = build failure). Counters tell build from test failures.</param>
+/// <param name="ExitCode">Process exit status. A non-zero exit after passing tests (test host, logger or post-test failure) is not a pass.</param>
+public sealed record BuildTestResult(bool Built, bool HasTests, int Total, int Passed, int Failed, double Seconds, string FailureText, int ExitCode = 0)
 {
-    public bool TestsOk => Built && (!HasTests || (Total > 0 && Failed == 0));
+    public bool TestsOk => Built && ExitCode == 0 && (!HasTests || (Total > 0 && Failed == 0));
 }
 
 public interface IBuildRunner
@@ -45,8 +47,10 @@ public sealed class DotnetBuildRunner(IProcessRunner proc, SecretMasker masker, 
         var built = hasTests ? !(r.ExitCode != 0 && total == 0) : r.ExitCode == 0;
         if (!built)
             fails = string.Join("\n", (r.StdOut + "\n" + r.StdErr).Split('\n').Where(l => l.Contains(": error ")).Select(l => l.Trim()).Distinct().Take(6));
+        else if (r.ExitCode != 0 && failed == 0)
+            fails = $"dotnet {args[0]} exited {r.ExitCode} although {passed}/{total} tests passed (test host, logger or post-test failure)";
         fails = System.Text.RegularExpressions.Regex.Replace(fails.Replace(root + Path.DirectorySeparatorChar, ""), @"\s*\[[^\]]+\.csproj\]", "");
-        return new BuildTestResult(built, hasTests, total, passed, failed, r.ElapsedMs / 1000.0, masker.Mask(fails, false));
+        return new BuildTestResult(built, hasTests, total, passed, failed, r.ElapsedMs / 1000.0, masker.Mask(fails, false), r.ExitCode);
     }
 }
 

@@ -14,6 +14,9 @@ public sealed class GateOptions
     public int MaxUnsafeOutcomes { get; set; }
     /// <summary>Maximum cases the harness could not complete (missing recording, setup error).</summary>
     public int MaxErrors { get; set; }
+    /// <summary>Maximum replayed cases whose recording was made for a different prompt (replay only; live calls have no drift).
+    /// Intentional prompt changes are re-recorded or re-stamped (--mode stamp) and reviewed, never silently replayed.</summary>
+    public int MaxPromptDrift { get; set; }
 
     public static GateOptions Load(string path) => File.Exists(path) ? JsonSerializer.Deserialize<GateOptions>(File.ReadAllText(path), Schema.Json) ?? new() : new();
 }
@@ -51,6 +54,14 @@ public sealed class MaxErrorsGate : IGateRule
 {
     public GateCheck Evaluate(EvalSummary s, BaselineComparison c, GateOptions o) =>
         new("harness_errors", s.Errors <= o.MaxErrors, $"{s.Errors} case(s) could not be completed (maximum {o.MaxErrors})");
+}
+
+public sealed class MaxPromptDriftGate : IGateRule
+{
+    public GateCheck Evaluate(EvalSummary s, BaselineComparison c, GateOptions o) =>
+        new("prompt_drift", s.PromptDrift <= o.MaxPromptDrift,
+            s.PromptDrift == 0 ? "every replayed recording matches today's prompt"
+            : $"{s.PromptDrift} case(s) replayed a recording made for a different prompt (maximum {o.MaxPromptDrift}): re-record or re-stamp after review");
 }
 
 public interface IGateEvaluator
