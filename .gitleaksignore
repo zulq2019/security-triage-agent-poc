@@ -1,0 +1,2 @@
+# Synthetic masking-test input in an early commit (current file carries gitleaks:allow)
+944421cb1b2b2e3217f5825edeef3b5fb5582b44:tests/SecAgent.Tests/UnitTests.cs:generic-api-key:46

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "secagent/fix-unsafe-code-output/1.0.0",
+  "type": "object",
+  "properties": {
+    "method_code": {
+      "type": "string",
+      "minLength": 20
+    },
+    "test_code": {
+      "type": "string",
+      "minLength": 20
+    },
+    "explanation": {
+      "type": "string",
+      "maxLength": 400
+    }
+  },
+  "required": [
+    "method_code",
+    "test_code",
+    "explanation"
+  ],
+  "additionalProperties": false
+}

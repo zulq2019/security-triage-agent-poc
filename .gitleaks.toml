@@ -1,0 +1,11 @@
+# Repo-level gitleaks config: default rules + narrowly scoped allowlist for known non-secrets.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SecAgent internal sha256 identifiers in recorded runs, and synthetic test inputs"
+regexTarget = "match"   # only the matched token is checked, so a real secret on the same line is still reported
+regexes = [
+  '''(idempotency_key|fix_group_key|fingerprint|content_hash|secret_hash)":"(sha256:|hmac:)?[0-9a-f]{64}"?''',
+  '''^sk_test_51Habcdefghijklmnop"?$''',   # synthetic input in tests/SecAgent.Tests/UnitTests.cs (MaskingTests)
+]

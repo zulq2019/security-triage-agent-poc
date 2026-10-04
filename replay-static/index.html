@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay of a recorded run · Security Triage &amp; Fix Agent · Live run</title>
+<style>
+:root{
+  --navy:#12303a; --navy-2:#1d4552; --teal:#0f7c7c; --teal-50:#e7f4f3; --teal-100:#cfe9e7;
+  --bg:#f5f7f8; --card:#ffffff; --line:#e4e9ec; --line-2:#eef2f4;
+  --ink:#16252b; --ink-2:#4a5b62; --ink-3:#7a8a91; --ink-4:#a9b5ba;
+  --green:#1a7f4b; --green-50:#e6f4ec; --amber:#b26a00; --amber-50:#fdf3e1;
+  --orange:#d4570f; --orange-50:#fdece2; --red:#c23a3a; --red-50:#fbeaea; --blue:#2463c7; --blue-50:#e8effb;
+  --r:14px; --shadow:0 1px 2px rgba(18,48,58,.05),0 4px 14px rgba(18,48,58,.05);
+  --mono:"JetBrains Mono","IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:Inter,"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  background:var(--bg);color:var(--ink);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit}
+a{color:inherit}
+.app{display:flex;flex-direction:column;height:100vh;min-width:1200px}
+
+/* ---------- top bar ---------- */
+.top{height:56px;flex:none;background:var(--navy);color:#fff;display:flex;align-items:center;padding:0 22px;gap:28px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
+.logo{width:28px;height:28px;border-radius:8px;background:linear-gradient(140deg,#16a3a0,#0f7c7c 60%,#0b5f60);display:grid;place-items:center;box-shadow:inset 0 0 0 1px rgba(255,255,255,.15)}
+.tabs{display:flex;gap:4px;height:100%;align-items:flex-end}
+.tab{height:100%;display:flex;align-items:center;padding:0 14px;color:rgba(255,255,255,.62);font-weight:500;cursor:default;position:relative;user-select:none}
+.tab.active{color:#fff}
+.tab.active::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:3px;border-radius:3px 3px 0 0;background:#3cc4bf}
+.tab .ct{margin-left:7px;font-size:10.5px;padding:1px 6px;border-radius:9px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.75)}
+.top .sp{flex:1}
+.top-right{display:flex;align-items:center;gap:14px;color:rgba(255,255,255,.7);font-size:12px}
+.env{padding:3px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.18)}
+.avatar{width:28px;height:28px;border-radius:50%;background:#2b5a68;display:grid;place-items:center;font-size:11px;font-weight:600;color:#fff}
+
+/* ---------- run header ---------- */
+.runbar{flex:none;margin:16px 20px 0;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  display:flex;align-items:center;padding:14px 18px;gap:22px}
+.run-title{display:flex;flex-direction:column;gap:3px;min-width:0;flex:0 1 auto;overflow:hidden}
+#rTitle{overflow:hidden;text-overflow:ellipsis;min-width:0}
+#runPill{flex:none}
+.run-title h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.015em;color:var(--navy);white-space:nowrap;display:flex;align-items:center;gap:10px}
+.run-title h1 .dot{color:var(--ink-4);font-weight:400}
+.run-title .sub{color:var(--ink-3);font-size:12px;white-space:nowrap}
+.run-title .sub b{color:var(--ink-2);font-weight:550}
+.pill{display:inline-flex;align-items:center;gap:7px;padding:4px 11px 4px 9px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;transition:all .4s}
+.pill .pd{width:8px;height:8px;border-radius:50%;background:currentColor}
+.pill.queued{background:#eef1f3;color:var(--ink-3)}
+.pill.running{background:var(--teal-50);color:var(--teal)}
+.pill.running .pd{animation:pulse 1.4s infinite}
+.pill.waiting{background:var(--amber-50);color:var(--amber)}
+.pill.waiting .pd{animation:pulseA 1.6s infinite}
+.runbar .sp{flex:1}
+.metric{display:flex;flex-direction:column;gap:3px;min-width:84px}
+.metric .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+.metric .v{font-size:16px;font-weight:650;color:var(--navy);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.vsep{width:1px;height:36px;background:var(--line)}
+.budget{width:250px}
+.budget .row{display:flex;justify-content:space-between;align-items:baseline}
+.budget .v small{font-size:12px;color:var(--ink-3);font-weight:500}
+.meter{height:7px;border-radius:5px;background:#e9eef0;overflow:hidden;margin-top:5px}
+.meter i{display:block;height:100%;width:0;border-radius:5px;background:linear-gradient(90deg,#0f7c7c,#2aa7a3);transition:width .25s linear}
+.budget .note{font-size:11px;color:var(--ink-3);margin-top:3px}
+.controls{display:flex;gap:8px;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:9px;border:1px solid var(--line);background:#fff;cursor:pointer;font-weight:550;font-size:12.5px;color:var(--navy)}
+.btn:hover{background:#f6f9fa}
+.btn.primary{background:var(--navy);border-color:var(--navy);color:#fff}
+.btn.primary:hover{background:var(--navy-2)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;height:32px}
+.seg button{border:0;background:#fff;padding:0 11px;cursor:pointer;font-weight:600;font-size:12px;color:var(--ink-3)}
+.seg button.on{background:var(--teal-50);color:var(--teal)}
+
+/* ---------- main grid ---------- */
+.main{flex:1;min-height:0;display:grid;grid-template-columns:318px minmax(0,1fr) 326px;gap:16px;padding:16px 20px 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);min-height:0}
+.card-h{display:flex;align-items:center;justify-content:space-between;padding:12px 16px 10px;border-bottom:1px solid var(--line-2)}
+.card-h h2{margin:0;font-size:12px;font-weight:650;text-transform:uppercase;letter-spacing:.07em;color:var(--navy)}
+.card-h .meta{font-size:11.5px;color:var(--ink-3)}
+
+/* pipeline */
+.pipe{display:flex;flex-direction:column}
+.pipe-list{padding:6px 8px;overflow:hidden;flex:1;display:flex;flex-direction:column;justify-content:space-between}
+.agent{display:grid;grid-template-columns:32px 1fr auto;gap:10px;align-items:center;padding:7px 8px;border-radius:10px;position:relative;transition:background .3s}
+.agent + .agent::before{content:"";position:absolute;left:23px;top:-6px;height:8px;width:2px;background:var(--line);border-radius:2px}
+.agent.st-running{background:linear-gradient(90deg,rgba(15,124,124,.08),rgba(15,124,124,.02))}
+.agent.st-retry{background:linear-gradient(90deg,rgba(212,87,15,.09),rgba(212,87,15,.02))}
+.agent.st-waiting{background:linear-gradient(90deg,rgba(178,106,0,.10),rgba(178,106,0,.02))}
+.ico{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:#f0f3f5;color:var(--ink-3);position:relative;transition:all .3s}
+.ico svg{width:17px;height:17px}
+.st-running .ico{background:var(--teal-50);color:var(--teal)}
+.st-done .ico{background:var(--green-50);color:var(--green)}
+.st-retry .ico{background:var(--orange-50);color:var(--orange)}
+.st-waiting .ico{background:var(--amber-50);color:var(--amber)}
+.badge{position:absolute;right:-4px;bottom:-4px;width:15px;height:15px;border-radius:50%;border:2px solid #fff;display:none;place-items:center}
+.st-done .badge{display:grid;background:var(--green)}
+.st-running .badge{display:block;background:var(--teal);animation:pulse 1.4s infinite}
+.st-retry .badge{display:grid;background:var(--orange)}
+.st-waiting .badge{display:block;background:#e19a1c;animation:pulseA 1.6s infinite}
+.badge svg{width:8px;height:8px;color:#fff}
+.a-body{min-width:0}
+.a-name{display:flex;align-items:center;gap:6px;font-weight:600;font-size:13px;color:var(--ink);white-space:nowrap}
+.st-queued .a-name{color:var(--ink-2)}
+.chip-m{font-size:9.5px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;padding:1px 6px;border-radius:5px;border:1px solid}
+.chip-m.small{color:#4f6b75;border-color:#d5dfe3;background:#f5f8f9}
+.chip-m.strong{color:#5b3fb5;border-color:#ddd3f5;background:#f6f3fd}
+.chip-m.tool{color:#7a8a91;border-color:#e2e7ea;background:#fafbfc}
+.a-status{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;display:flex;align-items:center;gap:5px}
+.st-done .a-status{color:var(--green)}
+.st-retry .a-status{color:var(--orange);font-weight:550}
+.st-waiting .a-status{color:var(--amber);font-weight:600}
+.a-tok{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums;text-align:right;font-family:var(--mono);white-space:nowrap}
+.a-tok.zero{color:var(--ink-4)}
+.retry-tag{font-size:9.5px;font-weight:650;color:var(--orange);background:var(--orange-50);border-radius:5px;padding:1px 5px}
+
+.shimmer{background:linear-gradient(90deg,#0f7c7c 0%,#0f7c7c 35%,#8fd4d1 50%,#0f7c7c 65%,#0f7c7c 100%);background-size:220% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent !important;animation:shim 1.8s linear infinite;font-weight:550}
+.shimmer.orange{background-image:linear-gradient(90deg,#d4570f 0%,#d4570f 35%,#f6b38b 50%,#d4570f 65%,#d4570f 100%)}
+@keyframes shim{from{background-position:110% 0}to{background-position:-110% 0}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(15,124,124,.45)}70%{box-shadow:0 0 0 7px rgba(15,124,124,0)}100%{box-shadow:0 0 0 0 rgba(15,124,124,0)}}
+@keyframes pulseA{0%{box-shadow:0 0 0 0 rgba(225,154,28,.5)}70%{box-shadow:0 0 0 7px rgba(225,154,28,0)}100%{box-shadow:0 0 0 0 rgba(225,154,28,0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* feed */
+.feedcard{display:flex;flex-direction:column;overflow:hidden}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--teal);font-weight:600}
+.live i{width:7px;height:7px;border-radius:50%;background:var(--teal);animation:pulse 1.4s infinite}
+.live.off{color:var(--ink-3)} .live.off i{background:var(--ink-4);animation:none}
+.feed{flex:1;overflow-y:auto;padding:14px 20px 8px;scroll-behavior:smooth}
+.feed::-webkit-scrollbar{width:8px}.feed::-webkit-scrollbar-thumb{background:#dfe5e8;border-radius:8px}
+.empty{color:var(--ink-4);text-align:center;padding:60px 0;font-size:13px}
+.entry{display:grid;grid-template-columns:58px 1fr;gap:10px;padding:9px 0 11px;position:relative;animation:enter .35s ease-out both}
+.entry + .entry{border-top:1px dashed var(--line-2)}
+@keyframes enter{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.ts{font-family:var(--mono);font-size:11px;color:var(--ink-4);padding-top:3px;font-variant-numeric:tabular-nums}
+.e-main{min-width:0}
+.e-head{display:flex;align-items:flex-start;gap:8px}
+.achip{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:650;padding:2px 8px 2px 6px;border-radius:6px;white-space:nowrap;margin-top:1px}
+.achip i{width:7px;height:7px;border-radius:2px;background:currentColor}
+.e-text{font-size:13.5px;color:var(--ink);font-weight:500;letter-spacing:-.003em;min-height:20px}
+.e-text .caret{display:inline-block;width:7px;height:15px;background:var(--teal);vertical-align:-2px;margin-left:1px;animation:blink 1s steps(1) infinite;border-radius:1px}
+@keyframes blink{50%{opacity:0}}
+.entry.warn .e-text{color:#7a4a00}
+.entry.fail .e-text{color:#a8350c}
+.entry.ok .e-text{color:#145f39}
+.entry.final .e-text{color:var(--navy);font-weight:600}
+.flag{flex:none;margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:5px;white-space:nowrap;opacity:0;transition:opacity .3s;margin-top:2px}
+.flag.show{opacity:1}
+.flag.crit{background:var(--red-50);color:var(--red)} .flag.high{background:var(--orange-50);color:var(--orange)}
+.flag.med{background:var(--amber-50);color:var(--amber)} .flag.noise{background:#eef1f3;color:var(--ink-3)}
+.flag.inj{background:var(--amber-50);color:var(--amber)} .flag.fail{background:var(--orange-50);color:var(--orange)}
+.flag.ok{background:var(--green-50);color:var(--green)} .flag.pr{background:var(--teal-50);color:var(--teal)}
+.think{margin:5px 0 0;font-size:12px;color:var(--ink-3)}
+.think-t{display:inline-flex;align-items:center;gap:5px;cursor:pointer;user-select:none;border-radius:6px;padding:1px 4px 1px 2px;margin-left:-2px}
+.think-t:hover{background:#f1f4f6}
+.think-t svg{width:12px;height:12px;transition:transform .2s}
+.think.open .think-t svg{transform:rotate(90deg)}
+.think-b{display:none;margin:5px 0 2px 6px;padding:2px 0 2px 12px;border-left:2px solid var(--line);font-style:italic;color:var(--ink-3);line-height:1.5;max-width:720px}
+.think.open .think-b{display:block}
+.think.live-t .think-t{cursor:default}
+.tools{margin-top:6px;display:flex;flex-direction:column;gap:3px}
+.tool{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);display:flex;align-items:center;gap:7px;animation:enter .25s ease-out both}
+.tool .tk{color:var(--ink-4)}
+.tool .tn{color:var(--navy);font-weight:600}
+.tool .ta{color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:520px}
+.tool .tst{width:13px;height:13px;flex:none;display:grid;place-items:center}
+.tool .spin{width:11px;height:11px;border:1.6px solid var(--teal-100);border-top-color:var(--teal);border-radius:50%;animation:spin .7s linear infinite}
+.tool .tst svg{width:12px;height:12px;color:var(--green)}
+.tool .tst.x svg{color:var(--orange)}
+.tool .td{color:var(--ink-4);margin-left:2px}
+.detail{margin-top:7px;animation:enter .3s ease-out both}
+.code{font-family:var(--mono);font-size:11.5px;background:#f7f9fa;border:1px solid var(--line-2);border-radius:9px;padding:7px 10px;line-height:1.6;color:var(--ink-2);overflow:hidden;white-space:pre}
+.code .del{color:#b23b3b;background:#fcefef;display:block;margin:0 -10px;padding:0 10px}
+.code .add{color:#17663f;background:#eaf6ef;display:block;margin:0 -10px;padding:0 10px}
+.code .cm{color:#8a6a1e}
+.code .fn{color:var(--ink-3);display:block}
+.quote{border:1px solid #f1dfb8;background:#fffaf0;border-radius:9px;padding:8px 11px;font-size:12px;color:#6d4c0e}
+.quote code{font-family:var(--mono);font-size:11.5px;color:#7a5410;display:block;margin:2px 0 5px}
+.evid{font-size:12px;color:var(--ink-2);background:#f7f9fa;border:1px solid var(--line-2);border-radius:9px;padding:7px 10px}
+.evid b{font-weight:600;color:var(--ink)}
+.failbox{border:1px solid #f6d3be;background:#fff6f0;border-radius:9px;padding:7px 10px;font-family:var(--mono);font-size:11.5px;color:#9a3b0b}
+.prbox{display:flex;align-items:center;gap:10px;border:1px solid var(--teal-100);background:#f3faf9;border-radius:9px;padding:8px 11px;font-size:12px}
+.prbox a{color:var(--teal);font-weight:650;text-decoration:none}
+
+.statusline{flex:none;border-top:1px solid var(--line-2);padding:10px 20px;display:flex;align-items:center;gap:10px;font-size:12.5px;background:#fbfcfc;border-radius:0 0 var(--r) var(--r)}
+.spinglyph{width:16px;text-align:center;color:var(--teal);font-weight:700;font-size:15px}
+.statusline .sl-text{font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.statusline .sl-meta,.statusline .kbd{white-space:nowrap;flex:none}
+.statusline .sl-meta{color:var(--ink-3);font-size:11.5px;font-family:var(--mono)}
+.statusline .sp{flex:1;min-width:8px}
+.statusline .kbd{font-size:11px;color:var(--ink-4)}
+.statusline.done .spinglyph{color:var(--amber)}
+.statusline.done .sl-text{color:var(--amber)}
+
+/* right column */
+.side{display:flex;flex-direction:column;gap:14px;min-height:0;overflow-y:auto;scrollbar-width:thin}
+.side > .card{flex:none}
+.side .card-h{padding:11px 14px 9px}
+.counts{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px 12px}
+.cnt{border-radius:10px;padding:8px 11px;border:1px solid var(--line-2);display:flex;flex-direction:column;gap:0}
+.cnt .n{font-size:22px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.2;display:inline-block;transition:transform .25s}
+.cnt .n.bump{animation:bump .5s ease-out}
+@keyframes bump{0%{transform:scale(1)}35%{transform:scale(1.28)}100%{transform:scale(1)}}
+.cnt .l{font-size:11.5px;color:var(--ink-2);font-weight:550;display:flex;align-items:center;gap:6px}
+.cnt .l i{width:7px;height:7px;border-radius:50%}
+.cnt.fix .n{color:var(--red)} .cnt.fix .l i{background:var(--red)}
+.cnt.batch .n{color:var(--blue)} .cnt.batch .l i{background:var(--blue)}
+.cnt.sup .n{color:var(--ink-3)} .cnt.sup .l i{background:var(--ink-4)}
+.cnt.hum .n{color:var(--amber)} .cnt.hum .l i{background:#e19a1c}
+.stack{display:flex;height:6px;border-radius:4px;overflow:hidden;margin:0 14px 12px;background:#edf1f3}
+.stack i{display:block;height:100%;transition:width .5s ease}
+.prs{padding:6px 8px 8px}
+.pr{display:grid;grid-template-columns:auto 1fr;gap:4px 9px;padding:8px 8px;border-radius:10px;animation:enter .4s ease-out both}
+.pr + .pr{border-top:1px solid var(--line-2)}
+.pr .num{font-weight:700;color:var(--teal);text-decoration:none;font-size:13px;grid-row:span 2;padding-top:1px}
+.pr .num:hover{text-decoration:underline}
+.pr .tt{font-size:12.5px;font-weight:550;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr .mm{font-size:11px;color:var(--ink-3);display:flex;gap:8px;align-items:center;white-space:nowrap}
+.pr .mm .add{color:var(--green);font-family:var(--mono)} .pr .mm .del{color:var(--red);font-family:var(--mono)}
+.pr .st{font-size:10px;font-weight:650;padding:1px 6px;border-radius:5px;background:var(--amber-50);color:var(--amber)}
+.noprs{color:var(--ink-4);font-size:12px;padding:12px 8px 10px;display:flex;gap:8px;align-items:center}
+.guards{padding:6px 14px 10px;display:flex;flex-direction:column;gap:2px}
+.g{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:12.5px}
+.g .gi{width:18px;height:18px;border-radius:50%;background:var(--green-50);color:var(--green);display:grid;place-items:center;flex:none;transition:all .3s}
+.g .gi svg{width:11px;height:11px}
+.g .gt{flex:1;color:var(--ink)}
+.g .gm{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums;white-space:nowrap}
+.g.hit .gi{background:var(--amber-50);color:var(--amber)}
+.g.hit .gm{color:var(--amber);font-weight:600}
+.kill{display:flex;align-items:center;gap:12px;padding:12px 14px}
+.kill .kt{flex:1}
+.kill .kt b{display:block;font-size:13px;color:var(--ink);font-weight:600}
+.kill .kt span{font-size:11.5px;color:var(--ink-3)}
+.switch{width:42px;height:24px;border-radius:999px;background:#d7dfe3;position:relative;cursor:pointer;border:0;flex:none;transition:background .2s}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .2s}
+.switch.on{background:var(--red)} .switch.on::after{left:21px}
+.kill.on .kt b{color:var(--red)}
+
+.replay-banner{flex:none;margin:12px 20px 0;padding:7px 14px;border-radius:10px;background:#fff6e5;border:1px solid #f1d29a;color:#7a5200;font-size:12.5px}
+.replay-banner b{color:#9a6200}
+.sample{position:fixed;right:12px;bottom:8px;font-size:10.5px;color:var(--ink-3);background:rgba(255,255,255,.9);border:1px solid var(--line);border-radius:6px;padding:2px 8px;letter-spacing:.02em;z-index:5}
+.sample b{color:var(--amber);font-weight:650}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--navy);color:#fff;padding:9px 14px;border-radius:10px;font-size:12.5px;opacity:0;transition:all .3s;pointer-events:none;z-index:9}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+/* ---------- live additions (slice 1) ---------- */
+.tab{cursor:pointer}
+.agent.st-failed .ico,.agent.st-stopped .ico{background:var(--red-50);color:var(--red)}
+.st-failed .a-status,.st-stopped .a-status{color:var(--red);font-weight:550}
+.st-failed .badge,.st-stopped .badge{display:grid;background:var(--red)}
+.pill.stopped{background:var(--red-50);color:var(--red)}
+.pill.done{background:var(--green-50);color:var(--green)}
+.runbar input{width:52px;height:32px;border:1px solid var(--line);border-radius:9px;padding:0 8px;font:inherit;font-weight:600;color:var(--navy)}
+.chk{display:inline-flex;gap:5px;align-items:center;font-size:12px;color:var(--ink-3)}
+.code .hunk{color:var(--ink-4);display:block}
+.code .ctx{display:block}
+.code + .code{margin-top:6px}
+.view{display:none;flex:1;min-height:0}
+.view.on{display:grid}
+#v-findings.on,#v-backlog.on,#v-controls.on{display:block;overflow:auto;padding:16px 20px 20px}
+table.ft{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow)}
+.ft th{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);background:#fbfcfc}
+.ft td{padding:9px 12px;border-bottom:1px solid var(--line-2);vertical-align:top;font-size:12.5px}
+.ft td.m{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.st{font-size:10.5px;font-weight:650;padding:2px 7px;border-radius:5px;background:#eef1f3;color:var(--ink-2);white-space:nowrap}
+.st.VERIFIED,.st.RESOLVED{background:var(--green-50);color:var(--green)} .st.SUPPRESSED{background:#eef1f3;color:var(--ink-3)}
+.st.NEEDS_HUMAN,.st.SUPPRESS_PENDING,.st.ACCEPT_PENDING{background:var(--amber-50);color:var(--amber)}
+.st.VERIFY_FAILED,.st.NEW{background:var(--orange-50);color:var(--orange)}
+.panel{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 18px;margin-bottom:14px}
+.panel h3{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--navy)}
+.panel pre{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);white-space:pre-wrap;margin:0}
+.note{color:var(--ink-3);font-size:12px}
+.tasks{padding:4px 14px 12px;display:flex;flex-direction:column;gap:6px}
+.task{font-size:12px;color:var(--ink-2);display:flex;gap:8px}
+.task b{color:var(--amber);font-weight:650;font-size:10.5px;text-transform:uppercase;white-space:nowrap}
+/* ---------- usage tab ---------- */
+#v-usage.on{display:block;overflow:auto;padding:16px 20px 24px}
+.u-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px}
+.u-bar .sp{flex:1}
+.u-bar select,.u-bar input[type=date]{height:32px;border:1px solid var(--line);border-radius:9px;padding:0 9px;font:inherit;font-size:12.5px;color:var(--navy);background:#fff;max-width:200px}
+.u-bar .lbl{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+.u-sub{display:flex;align-items:center;gap:10px;margin:-4px 2px 12px;font-size:12px;color:var(--ink-3)}
+.u-sub b{color:var(--ink-2);font-weight:600}
+.u-sub{flex-wrap:wrap;row-gap:6px}
+.u-synnote{flex-basis:100%;color:#7a5200;background:#fffaf0;border:1px dashed #f1d29a;border-radius:8px;padding:6px 10px;line-height:1.45}
+.u-synnote b{color:#7a5200}.u-synnote code{font-size:11px}
+.syn-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:650;color:#8a5a00;background:#fff4dc;border:1px solid #f1d29a;border-radius:999px;padding:3px 10px}
+.syn-badge i{width:7px;height:7px;border-radius:50%;background:#e19a1c}
+.u-tog{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);font-weight:550;cursor:pointer;user-select:none}
+.switch.sm{width:34px;height:20px}.switch.sm::after{width:14px;height:14px}.switch.sm.on{background:var(--teal)}.switch.sm.on::after{left:17px}
+.kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:13px 15px 12px;min-width:0}
+.kpi .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:600}
+.kpi .v{font-size:24px;font-weight:700;color:var(--navy);letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:4px;line-height:1.15}
+.kpi .s{font-size:11.5px;color:var(--ink-3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kpi .s b{color:var(--ink-2);font-weight:600}
+.kpi.warn .v{color:var(--orange)}
+.tag{display:inline-block;font-size:10px;font-weight:650;letter-spacing:.03em;padding:1px 6px;border-radius:5px;white-space:nowrap;vertical-align:1px}
+.tag.local{background:var(--green-50);color:var(--green)}
+.tag.ph{background:var(--amber-50);color:var(--amber)}
+.tag.syn{background:#fff4dc;color:#8a5a00}
+.tag.prov{background:#eef2f4;color:var(--ink-2)}
+.tag.cache{background:var(--blue-50);color:var(--blue)}
+.u-card{background:#fff;border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:14px;min-width:0}
+.u-card .card-h{padding:12px 16px 10px}
+.u-card .body{padding:12px 16px 14px}
+.u-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.u-grid > .u-card{margin-bottom:14px}
+.legend{display:flex;gap:14px;font-size:11.5px;color:var(--ink-2);align-items:center}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.legend i.ln{height:3px;border-radius:2px;width:14px;vertical-align:2px}
+.chart{width:100%;height:250px;display:block}
+.chart text{font-family:inherit;font-size:10.5px;fill:var(--ink-3)}
+.chart .bar:hover{opacity:.85}
+.chart .hov{fill:transparent}.chart .hov:hover{fill:rgba(18,48,58,.04)}
+table.ut{width:100%;border-collapse:collapse}
+.ut th{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);font-weight:600;white-space:nowrap}
+.ut th:first-child,.ut td:first-child,.ut th.l{text-align:left}
+.ut td{padding:8px 10px;border-bottom:1px solid var(--line-2);font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.ut tr:last-child td{border-bottom:0}
+.ut td.l{text-align:left}
+.ut td.m{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.ut .nm{font-weight:600;color:var(--ink)}
+.pct{display:inline-flex;align-items:center;gap:7px;justify-content:flex-end}
+.pct .pb{width:44px;height:6px;border-radius:4px;background:#edf1f3;overflow:hidden}
+.pct .pb i{display:block;height:100%;background:linear-gradient(90deg,#0f7c7c,#2aa7a3);border-radius:4px}
+.oc{font-size:10.5px;font-weight:650;padding:1px 7px;border-radius:5px;white-space:nowrap}
+.oc.ok{background:var(--green-50);color:var(--green)} .oc.schema_retry,.oc.fallback{background:var(--amber-50);color:var(--amber)}
+.oc.error,.oc.timeout{background:var(--red-50);color:var(--red)}
+.runlink{color:var(--teal);font-family:var(--mono);font-size:11.5px;font-weight:600;cursor:pointer;text-decoration:none;border-bottom:1px dashed var(--teal-100)}
+.runlink:hover{border-bottom-color:var(--teal)}
+.pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:10px 16px;border-top:1px solid var(--line-2);font-size:12px;color:var(--ink-3)}
+.pager .btn{height:28px;padding:0 10px}
+.burn{display:flex;flex-direction:column;gap:14px}
+.burn .row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px}
+.burn .row b{font-weight:650;color:var(--navy);font-variant-numeric:tabular-nums}
+.burn .meter{height:8px;margin-top:6px}
+.burn .meter i.hot{background:linear-gradient(90deg,#d4570f,#e19a1c)}
+.burn .note{margin-top:4px;font-size:11.5px}
+.runbars{display:flex;flex-direction:column;gap:5px;margin-top:4px}
+.runbars .rb{display:grid;grid-template-columns:150px 1fr 54px;gap:8px;align-items:center;font-size:11.5px;color:var(--ink-2)}
+.runbars .rb .t{height:6px;border-radius:4px;background:#edf1f3;overflow:hidden;position:relative}
+.runbars .rb .t i{display:block;height:100%;background:#2aa7a3;border-radius:4px}
+.runbars .rb .t i.syn{background:#e9c46a}
+.runbars .rb span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.u-empty{color:var(--ink-4);text-align:center;padding:28px 0;font-size:12.5px}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:720px;background:#fff;border-left:1px solid var(--line);box-shadow:-10px 0 30px rgba(18,48,58,.12);z-index:8;transform:translateX(100%);transition:transform .25s ease;display:flex;flex-direction:column}
+.drawer.open{transform:none}
+.drawer .dh{padding:16px 18px 12px;border-bottom:1px solid var(--line-2);display:flex;gap:10px;align-items:flex-start}
+.drawer .dh h3{margin:0;font-size:15px;color:var(--navy);font-weight:650}
+.drawer .dh .sub{font-size:12px;color:var(--ink-3);margin-top:3px}
+.drawer .db{flex:1;overflow:auto;padding:14px 18px}
+.drawer .x{margin-left:auto;border:0;background:#f1f4f6;border-radius:8px;width:28px;height:28px;cursor:pointer;color:var(--ink-2)}
+.drawer .kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.drawer .kpi{padding:9px 11px;box-shadow:none}
+.drawer .kpi .v{font-size:18px}
+.drawer .acts{display:flex;gap:8px;margin:2px 0 14px}
+</style>
+<style>
+/* ---------- Trends tab (replay only; SAMPLE DATA). Ported from sec-agent-sdd/trends-mockup, scoped to #v-trends ---------- */
+#v-trends.on{display:block;overflow:auto;padding:0 0 24px}
+#v-trends .trbar{margin:16px 20px 0;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);display:flex;align-items:center;gap:18px;padding:14px 18px;flex-wrap:wrap}
+#v-trends .trbar h1{margin:0;font-size:19px;color:var(--navy);font-weight:650;letter-spacing:-.015em}
+#v-trends .trbar .sub{color:var(--ink-3);font-size:13px;margin-top:2px}
+#v-trends .sdbadge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--amber-50);color:var(--amber);border:1.5px solid #e9b75a;font-weight:700;font-size:13px;letter-spacing:.01em;white-space:nowrap}
+#v-trends .trbar .btn,#v-trends .trbar .seg button{white-space:nowrap}
+#v-trends .sel{white-space:nowrap;height:32px;display:inline-flex;align-items:center;gap:6px;padding:0 12px;border:1px solid var(--line);border-radius:9px;font-weight:600;font-size:13px;color:var(--navy);background:#fff;cursor:pointer}
+#v-trends .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px;margin:14px 20px 0}
+#v-trends .kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:12px 14px}
+#v-trends .kpi .k{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);font-weight:650}
+#v-trends .kpi .v{font-size:25px;font-weight:700;color:var(--navy);margin-top:3px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+#v-trends .kpi .v.tgood{color:var(--green)} #v-trends .kpi .v.twarn{color:var(--orange)}
+#v-trends .kpi .s{font-size:12px;color:var(--ink-3);margin-top:1px;white-space:normal}
+#v-trends .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 20px 0}
+#v-trends .cb{padding:10px 14px 12px} #v-trends .card-h h2{font-size:12.5px} #v-trends .card-h .meta{font-size:12px}
+#v-trends .tbl{width:100%;border-collapse:collapse;font-size:13px} #v-trends .tbl td .mut{font-size:11.5px}
+#v-trends .tbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:650;padding:4px 4px 6px;border-bottom:1px solid var(--line)}
+#v-trends .tbl td{padding:5px 4px;border-bottom:1px solid var(--line-2);vertical-align:middle} #v-trends .tbl .num{text-align:right;font-variant-numeric:tabular-nums} #v-trends .tbl svg{display:block}
+#v-trends .mut{color:var(--ink-3);font-size:12px} #v-trends .foot{color:var(--ink-3);font-size:12px;margin-top:8px}
+#v-trends .exp{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line-2)} #v-trends .et{flex:1;font-size:13px}
+#v-trends .sev{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:2px 7px;border-radius:5px}
+#v-trends .sev.critical{background:var(--red-50);color:var(--red)} #v-trends .sev.high{background:var(--orange-50);color:var(--orange)} #v-trends .sev.medium{background:var(--amber-50);color:var(--amber)}
+#v-trends .days{font-weight:700;font-size:13px;color:var(--ink-2);background:#eef1f3;border-radius:7px;padding:3px 9px} #v-trends .days.soon{background:var(--red-50);color:var(--red)}
+#v-trends .licg{display:grid;grid-template-columns:1fr 1fr;column-gap:12px} #v-trends .lic{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px}
+#v-trends .lic span{width:78px;color:var(--ink-2);font-weight:600} #v-trends .lic i{height:14px;border-radius:4px;background:#5b3fb5;opacity:.75} #v-trends .lic b{color:var(--navy)}
+#v-trends .warn{border-left:4px solid;border-radius:8px;padding:8px 11px;margin-bottom:8px;background:#fafbfc} #v-trends .warn.crit{border-color:var(--red);background:var(--red-50)}
+#v-trends .warn.high{border-color:var(--orange);background:var(--orange-50)} #v-trends .warn.med{border-color:var(--amber);background:var(--amber-50)}
+#v-trends .wt{font-weight:700;font-size:13px;color:var(--navy)} #v-trends .wd{font-size:12.5px;color:var(--ink-2);margin-top:1px}
+#v-trends .sechead{display:flex;align-items:center;gap:14px;margin:18px 20px 0;padding:4px 0 0} #v-trends .sechead h3{margin:0;font-size:15px;color:var(--navy);font-weight:650}
+#v-trends .disclaimer{margin:14px 20px 0;color:var(--ink-3);font-size:12px}
+.tabs .tab{white-space:nowrap;padding:0 12px} #cfgLabel{white-space:nowrap}
+.tab .sample-pill{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#f5b544;border:1px solid rgba(245,181,68,.55);border-radius:6px;padding:1px 5px;margin-left:6px}
+@media (max-width:1180px){#v-trends .kpis{grid-template-columns:repeat(3,minmax(0,1fr))} #v-trends .grid3{grid-template-columns:minmax(0,1fr)}}
+</style>
+<style>
+/* ---------- Connections tab (MOCKUP), scoped to #v-connections / #cxModal ---------- */
+#v-connections.on{display:block;overflow:auto;padding:0 0 28px}
+#v-connections .cx-wrap{padding:0 20px}
+#v-connections .cx-head{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 20px;display:flex;align-items:center;gap:22px}
+#v-connections .cx-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#v-connections .cx-head > div:first-child{min-width:0}
+#v-connections .cx-head h1{margin:0;font-size:20px;color:var(--navy);font-weight:650;letter-spacing:-.015em}
+#v-connections .cx-head .sub{color:var(--ink-3);font-size:13px;margin-top:5px;max-width:620px}
+.cx-mock{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;background:var(--amber-50);color:var(--amber);border:1.5px solid #e9b75a;font-weight:700;font-size:12.5px;white-space:nowrap}
+#v-connections .cx-sp{flex:1}
+#v-connections .cx-dep{display:flex;flex-direction:column;align-items:flex-end;gap:5px;flex:none}
+#v-connections #cxAdd{flex:none}
+#v-connections .cx-dep .seg button{font-size:12.5px;padding:0 13px}
+#v-connections .cx-dep .why{font-size:12px;color:var(--ink-3);max-width:340px;text-align:right}
+#v-connections .cx-note{display:flex;align-items:center;gap:10px;margin-top:12px;padding:10px 14px;border-radius:12px;background:var(--teal-50);color:#0b5f60;font-size:12.5px;border:1px solid var(--teal-100)}
+#v-connections .cx-note b{color:#0b5f60}
+#v-connections .cx-note .dot{width:22px;height:22px;border-radius:50%;background:#fff;display:grid;place-items:center;flex:none;border:1px solid var(--teal-100)}
+#v-connections .cx-sec{display:flex;align-items:baseline;gap:10px;margin:22px 2px 10px}
+#v-connections .cx-sec h2{margin:0;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--navy);font-weight:650}
+#v-connections .cx-sec .meta{font-size:12px;color:var(--ink-3)}
+#v-connections .cx-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+#v-connections .cx-card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;display:flex;flex-direction:column;gap:10px;transition:border-color .2s,box-shadow .2s}
+#v-connections .cx-card:hover{border-color:#cfd8dc;box-shadow:0 1px 2px rgba(18,48,58,.06),0 8px 22px rgba(18,48,58,.08)}
+#v-connections .cx-card.flash{animation:cxflash 1.2s ease}
+@keyframes cxflash{0%{box-shadow:0 0 0 0 rgba(26,127,75,.45)}100%{box-shadow:0 0 0 14px rgba(26,127,75,0)}}
+#v-connections .cx-top{display:flex;align-items:center;gap:12px}
+.cx-ico{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:#fff;font-weight:750;font-size:14px;letter-spacing:-.02em;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.cx-ico.sm{width:30px;height:30px;border-radius:9px;font-size:11.5px}
+#v-connections .cx-name{font-weight:650;font-size:14.5px;color:var(--ink)}
+#v-connections .cx-cat{font-size:11.5px;color:var(--ink-3)}
+.cx-st{margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:650;white-space:nowrap}
+.cx-st i{width:7px;height:7px;border-radius:50%;background:currentColor}
+.cx-st.on{background:var(--green-50);color:var(--green)} .cx-st.off{background:#eef1f3;color:var(--ink-3)} .cx-st.soon{background:var(--blue-50);color:var(--blue)}
+#v-connections .cx-purpose{font-size:13px;color:var(--ink-2);min-height:19px}
+#v-connections .cx-foot{display:flex;align-items:center;gap:10px;margin-top:auto;padding-top:10px;border-top:1px solid var(--line-2)}
+#v-connections .cx-meta{font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#v-connections .cx-meta b{color:var(--ink-2);font-weight:600}
+#v-connections .cx-foot .btn{margin-left:auto}
+#v-connections .cx-soon{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+#v-connections .cx-soon .cx-card{padding:12px 14px;gap:6px;box-shadow:none;background:#fbfcfc}
+#v-connections .cx-soon .cx-name{font-size:13px}
+/* per-repo settings */
+#v-connections .cx-repo{display:grid;grid-template-columns:260px minmax(0,1fr);background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+#v-connections .cx-rlist{border-right:1px solid var(--line-2);padding:10px;background:#fbfcfc}
+#v-connections .cx-ritem{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;cursor:pointer;color:var(--ink-2)}
+#v-connections .cx-ritem:hover{background:#f1f5f6}
+#v-connections .cx-ritem.on{background:#fff;box-shadow:0 0 0 1px var(--line),0 2px 6px rgba(18,48,58,.06);color:var(--ink)}
+#v-connections .cx-ritem b{font-weight:600;font-size:13px} #v-connections .cx-ritem small{display:block;font-size:11.5px;color:var(--ink-3)}
+#v-connections .cx-rbody{padding:16px 20px}
+#v-connections .cx-rh{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+#v-connections .cx-rh h3{margin:0;font-size:15px;color:var(--navy);font-weight:650}
+#v-connections .cx-rows{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}
+#v-connections .cx-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line-2)}
+#v-connections .cx-row .l{flex:1;min-width:0} #v-connections .cx-row .l b{display:block;font-size:13px;font-weight:600;color:var(--ink)} #v-connections .cx-row .l span{font-size:12px;color:var(--ink-3)}
+#v-connections .cx-row.full{grid-column:1/-1}
+.cx-sw{width:36px;height:21px;border-radius:999px;background:#d7dfe3;position:relative;cursor:pointer;border:0;flex:none;transition:background .2s}
+.cx-sw::after{content:"";position:absolute;top:3px;left:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .2s}
+.cx-sw.on{background:var(--teal)} .cx-sw.on::after{left:18px}
+#v-connections .cx-chips{display:flex;flex-wrap:wrap;gap:6px}
+.cx-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line);background:#fff;font-size:12.5px;font-weight:600;color:var(--ink-3);cursor:pointer}
+.cx-chip.on{background:var(--teal-50);border-color:var(--teal-100);color:var(--teal)}
+.cx-chip[disabled]{cursor:not-allowed;opacity:.6;border-style:dashed}
+.cx-chip .ck{width:14px;height:14px;border-radius:4px;border:1.5px solid currentColor;display:grid;place-items:center;font-size:10px;line-height:1}
+#v-connections .cx-pr{display:flex;align-items:center;gap:10px;margin-top:14px;padding:10px 12px;border-radius:10px;background:#f6f8f9;font-size:12.5px;color:var(--ink-2)}
+#v-connections .cx-pr code{font-family:var(--mono);font-size:11.5px;color:var(--navy)}
+#v-connections .cx-pr .btn{margin-left:auto}
+#v-connections .cx-disc{margin-top:18px;font-size:12px;color:var(--ink-3)}
+/* modal */
+#cxModal{position:fixed;inset:0;z-index:20;display:none;align-items:center;justify-content:center;background:rgba(14,32,38,.42);backdrop-filter:blur(2px)}
+#cxModal.open{display:flex}
+#cxModal .dlg{width:560px;max-width:calc(100vw - 40px);max-height:calc(100vh - 60px);display:flex;flex-direction:column;background:#fff;border-radius:16px;box-shadow:0 24px 60px rgba(14,32,38,.28);overflow:hidden;animation:cxin .18s ease}
+@keyframes cxin{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+#cxModal .dh{display:flex;align-items:center;gap:12px;padding:16px 18px 12px}
+#cxModal .dh h3{margin:0;font-size:16px;color:var(--navy);font-weight:650} #cxModal .dh .s{font-size:12px;color:var(--ink-3)}
+#cxModal .x{margin-left:auto;border:0;background:#f1f4f5;width:30px;height:30px;border-radius:9px;cursor:pointer;color:var(--ink-3);font-size:14px}
+#cxModal .steps{display:flex;gap:6px;padding:0 18px 12px}
+#cxModal .steps span{flex:1;font-size:11.5px;font-weight:650;color:var(--ink-4);padding-top:8px;border-top:3px solid #e6ebee}
+#cxModal .steps span.on{color:var(--teal);border-color:var(--teal)} #cxModal .steps span.done{color:var(--ink-2);border-color:#9fd3d0}
+#cxModal .db{padding:4px 18px 16px;overflow:auto;font-size:13px;color:var(--ink-2)}
+#cxModal .db h4{margin:6px 0 8px;font-size:13.5px;color:var(--ink);font-weight:650}
+#cxModal .perm{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line-2)}
+#cxModal .perm .pi{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:12px;font-weight:800;flex:none;margin-top:1px}
+#cxModal .perm .pi.ok{background:var(--green-50);color:var(--green)} #cxModal .perm .pi.no{background:var(--red-50);color:var(--red)}
+#cxModal .perm b{color:var(--ink);font-weight:600} #cxModal .perm small{display:block;color:var(--ink-3);font-size:12px}
+#cxModal .pick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin-bottom:8px;cursor:pointer}
+#cxModal .pick input{width:16px;height:16px;accent-color:var(--teal)}
+#cxModal .pick small{margin-left:auto;color:var(--ink-3);font-size:12px}
+#cxModal .kv{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-2)} #cxModal .kv span:first-child{width:150px;color:var(--ink-3);flex:none}
+#cxModal .kv b{color:var(--ink);font-weight:600}
+#cxModal .done{text-align:center;padding:14px 6px 6px} #cxModal .done .big{width:54px;height:54px;border-radius:50%;background:var(--green-50);color:var(--green);display:grid;place-items:center;margin:0 auto 10px;font-size:26px;font-weight:800}
+#cxModal .df{display:flex;align-items:center;gap:10px;padding:12px 18px;border-top:1px solid var(--line-2);background:#fbfcfc}
+#cxModal .df .note{font-size:11.5px;color:var(--ink-3)} #cxModal .df .btn:first-of-type{margin-left:auto}
+#cxModal .search{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;padding:0 12px;font:inherit;font-size:13.5px;outline:none;margin-bottom:10px}
+#cxModal .search:focus{border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-50)}
+#cxModal .pl{display:flex;align-items:center;gap:12px;padding:9px 8px;border-radius:10px;cursor:pointer}
+#cxModal .pl:hover{background:#f3f6f7} #cxModal .pl .t{flex:1;min-width:0} #cxModal .pl b{display:block;color:var(--ink);font-weight:600} #cxModal .pl small{color:var(--ink-3);font-size:12px}
+#cxModal .empty{padding:18px;text-align:center;color:var(--ink-3)}
+/* seven header tabs: keep them on one line; the replay label on the right shrinks (ellipsis) instead of pushing the avatar off-screen */
+.tabs .tab{white-space:nowrap} .top .tabs{flex:none} .top .sp{min-width:0}
+.top-right{min-width:0;flex:0 1 auto} .top-right #cfgLabel{min-width:0;overflow:hidden;text-overflow:ellipsis} .top-right .avatar{flex:none}
+@media (max-width:1360px){.tabs .tab{padding:0 9px} .tab .sample-pill{display:none} .top{gap:18px}}
+@media (max-width:1180px){#v-connections .cx-grid{grid-template-columns:repeat(2,minmax(0,1fr))} #v-connections .cx-soon{grid-template-columns:repeat(3,minmax(0,1fr))}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand">
+      <div class="logo"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      Security Triage &amp; Fix Agent
+    </div>
+    <nav class="tabs">
+      <div class="tab active" data-v="live">Live run</div>
+      <div class="tab" data-v="findings">Findings <span class="ct" id="ctFind">0</span></div>
+      <div class="tab" data-v="backlog">Backlog <span class="ct" id="ctBack">0</span></div>
+      <div class="tab" data-v="usage">Usage</div>
+      <div class="tab" data-v="trends">Trends<span class="sample-pill">sample</span></div>
+      <div class="tab" data-v="connections">Connections</div>
+      <div class="tab" data-v="controls">Controls</div>
+    </nav>
+    <div class="sp"></div>
+    <div class="top-right">
+      <span class="env" id="cfgLabel">local POC · synthetic data</span>
+      <div class="avatar">ZS</div>
+    </div>
+  </header>
+
+  <section class="runbar">
+    <div class="run-title">
+      <h1><span id="rTitle">No run yet</span>
+        <span id="runPill" class="pill queued"><span class="pd"></span><span id="runPillText">Idle</span></span></h1>
+      <div class="sub" id="rSub">Start a run on a pull request of the sample repo</div>
+    </div>
+    <div class="sp"></div>
+    <div class="metric"><span class="k">Elapsed</span><span class="v" id="elapsed">00:00</span></div>
+    <div class="vsep"></div>
+    <div class="metric"><span class="k">Agents</span><span class="v" id="agentsDone">0 / 10</span></div>
+    <div class="vsep"></div>
+    <div class="metric budget">
+      <div class="row"><span class="k">Token budget</span><span class="note" id="cost">local model · $0</span></div>
+      <span class="v" id="budgetV">0 <small>/ – tokens</small></span>
+      <div class="meter"><i id="budgetBar"></i></div>
+    </div>
+    <div class="vsep"></div>
+    <div class="controls">
+      <span class="chk">PR #</span><input id="prNum" value="1" aria-label="PR number">
+      <label class="chk"><input type="checkbox" id="fresh" style="width:auto;height:auto"> fresh triage</label>
+      <button class="btn primary" id="runBtn"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l14 8-14 8z"/></svg>Run on PR #<span id="prLbl">1</span></button>
+      <button class="btn" id="reviewBtn" style="display:none">Record review</button>
+    </div>
+  </section>
+
+  <main class="main view on" id="v-live">
+    <section class="card pipe">
+      <div class="card-h"><h2>Agent pipeline</h2><span class="meta">model · tokens</span></div>
+      <div class="pipe-list" id="pipe"></div>
+    </section>
+
+    <section class="card feedcard">
+      <div class="card-h"><h2>Activity</h2><span class="live off" id="live"><i></i><span>Idle</span></span></div>
+      <div class="feed" id="feed"><div class="empty" id="empty">Waiting for run to start…</div></div>
+      <div class="statusline" id="statusline">
+        <span class="spinglyph" id="glyph">✻</span>
+        <span class="sl-text" id="slText">Idle</span>
+        <span class="sl-meta" id="slMeta"></span>
+        <span class="sp"></span>
+        <span class="kbd">agents cannot merge</span>
+      </div>
+    </section>
+
+    <aside class="side">
+      <section class="card">
+        <div class="card-h"><h2>Findings</h2><span class="meta" id="findMeta">0 of 0 triaged</span></div>
+        <div class="counts">
+          <div class="cnt fix"><span class="n" id="c-fix">0</span><span class="l"><i></i>Fix now</span></div>
+          <div class="cnt batch"><span class="n" id="c-batch">0</span><span class="l"><i></i>Batch</span></div>
+          <div class="cnt sup"><span class="n" id="c-sup">0</span><span class="l"><i></i>Suppressed</span></div>
+          <div class="cnt hum"><span class="n" id="c-hum">0</span><span class="l"><i></i>Needs human</span></div>
+        </div>
+        <div class="stack"><i id="s-fix" style="background:var(--red)"></i><i id="s-batch" style="background:var(--blue)"></i><i id="s-sup" style="background:#b9c4c9"></i><i id="s-hum" style="background:#e19a1c"></i></div>
+      </section>
+      <section class="card">
+        <div class="card-h"><h2>Fix PRs</h2><span class="meta" id="prMeta">0 open</span></div>
+        <div class="prs" id="prs"><div class="noprs"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v11M18 15.5V10a3 3 0 0 0-3-3h-4"/></svg>No fix PRs yet — fixers haven't finished</div></div>
+        <div class="tasks" id="tasks"></div>
+      </section>
+      <section class="card">
+        <div class="card-h"><h2>Guardrails</h2><span class="meta" id="gMeta">all passing</span></div>
+        <div class="guards">
+          <div class="g"><span class="gi">✓</span><span class="gt">No merge access</span><span class="gm">PRs only</span></div>
+          <div class="g"><span class="gi">✓</span><span class="gt">Secrets masked in logs</span><span class="gm" id="gMask">0 masked</span></div>
+          <div class="g" id="gBud"><span class="gi">✓</span><span class="gt">Budget OK</span><span class="gm" id="gBudget">0% used</span></div>
+          <div class="g" id="gInj"><span class="gi">✓</span><span class="gt">Repo content treated as data</span><span class="gm" id="gInjM">0 ignored</span></div>
+          <div class="g" id="gRet"><span class="gi">✓</span><span class="gt">Retry cap (2 per fixer)</span><span class="gm" id="gRetry">0 used</span></div>
+          <div class="g" id="gFix"><span class="gi">✓</span><span class="gt" id="gFixT">Fix cap (max_fixes 10)</span><span class="gm" id="gFixM">within cap</span></div>
+          <div class="g" id="gTime"><span class="gi">✓</span><span class="gt" id="gTimeT">Time budget (max_minutes 45)</span><span class="gm" id="gTimeM">within budget</span></div>
+        </div>
+      </section>
+      <section class="card">
+        <div class="kill" id="kill">
+          <div class="kt"><b id="killT">Kill switch</b><span id="killS">Stops all agents &amp; cancels in-flight calls</span></div>
+          <button class="switch" id="killSw" aria-label="Kill switch"></button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <section class="view" id="v-findings"><table class="ft" id="ftable"></table></section>
+  <section class="view" id="v-backlog"></section>
+  <section class="view" id="v-usage">
+    <div class="panel u-bar">
+      <span class="lbl">Range</span>
+      <div class="seg" id="uRange"><button data-r="today">Today</button><button data-r="7d" class="on">7 days</button><button data-r="30d">30 days</button><button data-r="custom">Custom</button></div>
+      <span id="uCustom" style="display:none"><input type="date" id="uFrom" aria-label="From (IST)"> – <input type="date" id="uTo" aria-label="To (IST)"></span>
+      <select id="uModel" aria-label="Model"><option value="">All models</option></select>
+      <select id="uAgent" aria-label="Agent"><option value="">All agents</option></select>
+      <select id="uRun" aria-label="Run"><option value="">All runs</option></select>
+      <span class="sp"></span>
+      <span class="syn-badge" id="uSynBadge" style="display:none"><i></i>Synthetic sample data in view</span>
+      <label class="u-tog" id="uSynTog"><button class="switch sm on" id="uSynSw" aria-label="Show synthetic sample data"></button>Show synthetic</label>
+      <a class="btn" id="uCsv" href="#" download>Export CSV</a>
+    </div>
+    <div class="u-sub" id="uSub"></div>
+    <div class="kpis" id="uKpis"></div>
+    <div class="u-card">
+      <div class="card-h"><h2>Daily tokens &amp; cost</h2><div class="legend"><span><i style="background:#0f7c7c"></i>Input tokens</span><span><i style="background:#9fd8d4"></i>Output tokens</span><span id="uCostLeg"><i class="ln" style="background:#c77700"></i>Cost (USD)</span></div></div>
+      <div class="body"><div id="uChart"></div><div class="note" id="uChartNote"></div></div>
+    </div>
+    <div class="u-grid">
+      <div class="u-card"><div class="card-h"><h2>By model</h2><span class="meta" id="uModelMeta"></span></div><div id="uByModel"></div></div>
+      <div class="u-card"><div class="card-h"><h2>By agent</h2><span class="meta" id="uAgentMeta"></span></div><div id="uByAgent"></div></div>
+    </div>
+    <div class="u-grid" style="grid-template-columns:minmax(0,1fr) minmax(0,2fr)">
+      <div class="u-card"><div class="card-h"><h2>Budget burn</h2><span class="meta">vs policies.yaml</span></div><div class="body burn" id="uBurn"></div></div>
+      <div class="u-card"><div class="card-h"><h2>By task</h2><span class="meta">triage · fix · verify · summarise</span></div><div id="uByTask"></div></div>
+    </div>
+    <div class="u-card">
+      <div class="card-h"><h2>Recent model calls</h2><span class="meta">times in IST · click a run to drill down</span></div>
+      <div id="uCalls"></div>
+      <div class="pager" id="uPager"></div>
+    </div>
+  </section>
+  <aside class="drawer" id="uDrawer" aria-label="Run usage"></aside>
+  <section class="view" id="v-trends" aria-label="Trends (sample data)">
+  <section class="trbar">
+    <div><h1>Trends</h1><div class="sub">All repos · last 12 weeks · nightly rollup · read-only</div></div>
+    <span class="sdbadge" title="Every number on this tab is synthetic sample data, not computed from the recorded run"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>Sample data (illustrative)</span>
+    <div class="sp" style="flex:1"></div>
+    <span class="sel" data-mock="1" title="Illustrative sample view: not wired to data">Repo: all ▾</span><span class="sel" data-mock="1" title="Illustrative sample view: not wired to data">Team: all ▾</span>
+    <div class="seg"><button data-mock="1" title="Illustrative sample view: not wired to data">4 wk</button><button class="on" data-mock="1" title="Illustrative sample view: not wired to data">12 wk</button><button data-mock="1" title="Illustrative sample view: not wired to data">12 mo</button></div>
+    <button class="btn" data-mock="1" title="Illustrative sample view: not wired to data">Export CSV</button><button class="btn" data-mock="1" title="Illustrative sample view: not wired to data">Open in Power BI</button>
+  </section>
+  <div class="kpis">
+    <div class="kpi"><div class="k">Open critical / high</div><div class="v tgood">17</div><div class="s">was 29 · target [placeholder]</div></div>
+    <div class="kpi"><div class="k">Median time to fix · critical</div><div class="v ">2.5 d</div><div class="s">p90 6 d · target [placeholder]</div></div>
+    <div class="kpi"><div class="k">Fix PR merge rate</div><div class="v tgood">78%</div><div class="s">all fixers · target [placeholder]</div></div>
+    <div class="kpi"><div class="k">Triage override rate</div><div class="v ">5%</div><div class="s">humans changed the decision</div></div>
+    <div class="kpi"><div class="k">Tokens per merged fix</div><div class="v ">3.4k</div><div class="s">cost = tokens × [rate]</div></div>
+    <div class="kpi"><div class="k">Acceptances expiring ≤ 30 d</div><div class="v twarn">3</div><div class="s">1 critical · review owner</div></div>
+  </div>
+  <div class="grid3">
+    <div class="card "><div class="card-h"><h2>Opened vs fixed</h2><span class="meta">per week</span></div><div class="cb"><svg viewBox="0 0 392 230" width="100%" style="display:block" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,Segoe UI,Arial,sans-serif"><line x1="34" x2="384" y1="184.0" y2="184.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="188.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">0</text><line x1="34" x2="384" y1="141.0" y2="141.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="145.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">5</text><line x1="34" x2="384" y1="98.0" y2="98.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="102.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">10</text><line x1="34" x2="384" y1="55.0" y2="55.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="59.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">15</text><line x1="34" x2="384" y1="12.0" y2="12.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="16.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">20</text><rect x="38.0" y="63.6" width="9.6" height="120.4" rx="2" fill="#e3b04b"/><rect x="48.6" y="106.6" width="9.6" height="77.4" rx="2" fill="#0f7c7c"/><rect x="67.2" y="89.4" width="9.6" height="94.6" rx="2" fill="#e3b04b"/><rect x="77.8" y="80.8" width="9.6" height="103.2" rx="2" fill="#0f7c7c"/><rect x="96.3" y="46.4" width="9.6" height="137.6" rx="2" fill="#e3b04b"/><rect x="106.9" y="63.6" width="9.6" height="120.4" rx="2" fill="#0f7c7c"/><rect x="125.5" y="80.8" width="9.6" height="103.2" rx="2" fill="#e3b04b"/><rect x="136.1" y="55.0" width="9.6" height="129.0" rx="2" fill="#0f7c7c"/><rect x="154.7" y="106.6" width="9.6" height="77.4" rx="2" fill="#e3b04b"/><rect x="165.3" y="63.6" width="9.6" height="120.4" rx="2" fill="#0f7c7c"/><rect x="183.8" y="72.2" width="9.6" height="111.8" rx="2" fill="#e3b04b"/><rect x="194.4" y="72.2" width="9.6" height="111.8" rx="2" fill="#0f7c7c"/><rect x="213.0" y="98.0" width="9.6" height="86.0" rx="2" fill="#e3b04b"/><rect x="223.6" y="55.0" width="9.6" height="129.0" rx="2" fill="#0f7c7c"/><rect x="242.2" y="115.2" width="9.6" height="68.8" rx="2" fill="#e3b04b"/><rect x="252.8" y="63.6" width="9.6" height="120.4" rx="2" fill="#0f7c7c"/><rect x="271.3" y="89.4" width="9.6" height="94.6" rx="2" fill="#e3b04b"/><rect x="281.9" y="80.8" width="9.6" height="103.2" rx="2" fill="#0f7c7c"/><rect x="300.5" y="123.8" width="9.6" height="60.2" rx="2" fill="#e3b04b"/><rect x="311.1" y="72.2" width="9.6" height="111.8" rx="2" fill="#0f7c7c"/><rect x="329.7" y="106.6" width="9.6" height="77.4" rx="2" fill="#e3b04b"/><rect x="340.2" y="80.8" width="9.6" height="103.2" rx="2" fill="#0f7c7c"/><rect x="358.8" y="132.4" width="9.6" height="51.6" rx="2" fill="#e3b04b"/><rect x="369.4" y="89.4" width="9.6" height="94.6" rx="2" fill="#0f7c7c"/><text x="48.583333333333336" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 1</text><text x="106.91666666666667" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 3</text><text x="165.25" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 5</text><text x="223.58333333333334" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 7</text><text x="281.91666666666663" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 9</text><text x="340.25" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 11</text><rect x="34" y="212" width="10" height="10" rx="2" fill="#e3b04b"/><text x="49" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">opened</text><rect x="114" y="212" width="10" height="10" rx="2" fill="#0f7c7c"/><text x="129" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">fixed</text><text x="384" y="221" font-size="12" fill="#12303a" text-anchor="end" font-weight="600">net open −28 in 12 weeks</text></svg></div></div>
+    <div class="card "><div class="card-h"><h2>Burn-down · open findings</h2><span class="meta">by severity</span></div><div class="cb"><svg viewBox="0 0 392 230" width="100%" style="display:block" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,Segoe UI,Arial,sans-serif"><line x1="34" x2="384" y1="184.0" y2="184.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="188.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">0</text><line x1="34" x2="384" y1="141.0" y2="141.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="145.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">25</text><line x1="34" x2="384" y1="98.0" y2="98.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="102.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">50</text><line x1="34" x2="384" y1="55.0" y2="55.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="59.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">75</text><line x1="34" x2="384" y1="12.0" y2="12.0" stroke="#e4e9ec" stroke-width="1"/><text x="28" y="16.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">100</text><polygon points="34.0,129.0 65.8,129.0 97.6,129.0 129.5,129.0 161.3,132.4 193.1,130.7 224.9,134.1 256.7,137.6 288.5,137.6 320.4,141.0 352.2,141.0 384.0,144.4 384.0,184.0 352.2,184.0 320.4,184.0 288.5,184.0 256.7,184.0 224.9,184.0 193.1,184.0 161.3,184.0 129.5,184.0 97.6,184.0 65.8,184.0 34.0,184.0" fill="#8aa4ad" fill-opacity=".85" stroke="#fff" stroke-width="1"/><polygon points="34.0,60.2 65.8,60.2 97.6,58.4 129.5,60.2 161.3,67.0 193.1,65.3 224.9,72.2 256.7,79.1 288.5,80.8 320.4,87.7 352.2,89.4 384.0,96.3 384.0,144.4 352.2,141.0 320.4,141.0 288.5,137.6 256.7,137.6 224.9,134.1 193.1,130.7 161.3,132.4 129.5,129.0 97.6,129.0 65.8,129.0 34.0,129.0" fill="#b26a00" fill-opacity=".85" stroke="#fff" stroke-width="1"/><polygon points="34.0,20.6 65.8,20.6 97.6,18.9 129.5,22.3 161.3,30.9 193.1,29.2 224.9,37.8 256.7,46.4 288.5,49.8 320.4,58.4 352.2,61.9 384.0,70.5 384.0,96.3 352.2,89.4 320.4,87.7 288.5,80.8 256.7,79.1 224.9,72.2 193.1,65.3 161.3,67.0 129.5,60.2 97.6,58.4 65.8,60.2 34.0,60.2" fill="#d4570f" fill-opacity=".85" stroke="#fff" stroke-width="1"/><polygon points="34.0,10.3 65.8,10.3 97.6,8.6 129.5,13.7 161.3,22.3 193.1,22.3 224.9,30.9 256.7,41.2 288.5,44.7 320.4,53.3 352.2,58.4 384.0,67.0 384.0,70.5 352.2,61.9 320.4,58.4 288.5,49.8 256.7,46.4 224.9,37.8 193.1,29.2 161.3,30.9 129.5,22.3 97.6,18.9 65.8,20.6 34.0,20.6" fill="#c23a3a" fill-opacity=".85" stroke="#fff" stroke-width="1"/><text x="34.00000000000001" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 1</text><text x="97.63636363636365" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 3</text><text x="161.2727272727273" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 5</text><text x="224.90909090909093" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 7</text><text x="288.5454545454546" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 9</text><text x="352.18181818181824" y="200" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 11</text><rect x="34" y="212" width="10" height="10" rx="2" fill="#c23a3a"/><text x="49" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">Critical</text><rect x="128" y="212" width="10" height="10" rx="2" fill="#d4570f"/><text x="143" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">High</text><rect x="190" y="212" width="10" height="10" rx="2" fill="#b26a00"/><text x="205" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">Medium</text><rect x="268" y="212" width="10" height="10" rx="2" fill="#8aa4ad"/><text x="283" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">Low</text></svg></div></div>
+    <div class="card "><div class="card-h"><h2>Time to fix</h2><span class="meta">p50 / p90 by severity</span></div><div class="cb"><svg viewBox="0 0 392 230" width="100%" style="display:block" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,Segoe UI,Arial,sans-serif"><line x1="78.0" x2="78.0" y1="8" y2="176" stroke="#e4e9ec"/><text x="78.0" y="192" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">0 d</text><line x1="145.0" x2="145.0" y1="8" y2="176" stroke="#e4e9ec"/><text x="145.0" y="192" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">20 d</text><line x1="212.0" x2="212.0" y1="8" y2="176" stroke="#e4e9ec"/><text x="212.0" y="192" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">40 d</text><line x1="279.0" x2="279.0" y1="8" y2="176" stroke="#e4e9ec"/><text x="279.0" y="192" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">60 d</text><line x1="346.0" x2="346.0" y1="8" y2="176" stroke="#e4e9ec"/><text x="346.0" y="192" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">80 d</text><text x="68" y="31" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">Critical</text><rect x="78" y="19" width="20.1" height="18" rx="3" fill="#c23a3a" fill-opacity=".25"/><rect x="78" y="19" width="8.4" height="18" rx="3" fill="#c23a3a"/><text x="104.1" y="32" font-size="11" fill="#4a5b62" text-anchor="start" font-weight="400">2.5 / 6</text><text x="68" y="71" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">High</text><rect x="78" y="59" width="60.3" height="18" rx="3" fill="#d4570f" fill-opacity=".25"/><rect x="78" y="59" width="23.4" height="18" rx="3" fill="#d4570f"/><text x="144.3" y="72" font-size="11" fill="#4a5b62" text-anchor="start" font-weight="400">7 / 18</text><text x="68" y="111" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">Medium</text><rect x="78" y="99" width="137.3" height="18" rx="3" fill="#b26a00" fill-opacity=".25"/><rect x="78" y="99" width="63.6" height="18" rx="3" fill="#b26a00"/><text x="221.35" y="112" font-size="11" fill="#4a5b62" text-anchor="start" font-weight="400">19 / 41</text><text x="68" y="151" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">Low</text><rect x="78" y="139" width="234.5" height="18" rx="3" fill="#8aa4ad" fill-opacity=".25"/><rect x="78" y="139" width="113.9" height="18" rx="3" fill="#8aa4ad"/><text x="318.5" y="152" font-size="11" fill="#4a5b62" text-anchor="start" font-weight="400">34 / 70</text><rect x="78" y="212" width="10" height="10" rx="2" fill="#12303a"/><text x="93" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">p50</text><rect x="130" y="212" width="10" height="10" rx="2" fill="#12303a" fill-opacity=".25"/><text x="145" y="221" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">p90 (days)</text><text x="384" y="221" font-size="12" fill="#7a8a91" text-anchor="end" font-weight="400">target [placeholder]</text></svg></div></div>
+  </div>
+  <div class="sechead"><h3>Agent quality · repeat offenders · risk view · early warning</h3><span class="sdbadge" title="Every number on this tab is synthetic sample data, not computed from the recorded run"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>Sample data (illustrative)</span></div>
+  <div class="grid3">
+    <div class="card "><div class="card-h"><h2>Fix PR merge rate per fixer</h2><span class="meta">merged ÷ opened, per week</span></div><div class="cb"><svg viewBox="0 0 392 218" width="100%" style="display:block" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,Segoe UI,Arial,sans-serif"><line x1="40" x2="382" y1="154.0" y2="154.0" stroke="#e4e9ec"/><text x="34" y="158.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">40%</text><line x1="40" x2="382" y1="106.7" y2="106.7" stroke="#e4e9ec"/><text x="34" y="110.66666666666666" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">60%</text><line x1="40" x2="382" y1="59.3" y2="59.3" stroke="#e4e9ec"/><text x="34" y="63.33333333333333" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">80%</text><line x1="40" x2="382" y1="12.0" y2="12.0" stroke="#e4e9ec"/><text x="34" y="16.0" font-size="11" fill="#7a8a91" text-anchor="end" font-weight="400">100%</text><polyline points="40.0,101.9 71.1,97.2 102.2,92.5 133.3,94.8 164.4,85.4 195.5,80.6 226.5,83.0 257.6,75.9 288.7,73.5 319.8,68.8 350.9,71.2 382.0,64.1" fill="none" stroke="#0f7c7c" stroke-width="2.4" stroke-linejoin="round"/><circle cx="382.0" cy="64.1" r="3.5" fill="#0f7c7c"/><polyline points="40.0,83.0 71.1,78.3 102.2,80.6 133.3,73.5 164.4,68.8 195.5,71.2 226.5,64.1 257.6,59.3 288.7,61.7 319.8,57.0 350.9,54.6 382.0,52.2" fill="none" stroke="#2463c7" stroke-width="2.4" stroke-linejoin="round"/><circle cx="382.0" cy="52.2" r="3.5" fill="#2463c7"/><polyline points="40.0,144.5 71.1,137.4 102.2,139.8 133.3,130.3 164.4,132.7 195.5,125.6 226.5,118.5 257.6,120.9 288.7,113.8 319.8,111.4 350.9,106.7 382.0,104.3" fill="none" stroke="#5b3fb5" stroke-width="2.4" stroke-linejoin="round"/><circle cx="382.0" cy="104.3" r="3.5" fill="#5b3fb5"/><polyline points="40.0,59.3 71.1,54.6 102.2,57.0 133.3,49.9 164.4,52.2 195.5,47.5 226.5,45.1 257.6,47.5 288.7,42.8 319.8,40.4 350.9,42.8 382.0,38.0" fill="none" stroke="#1a7f4b" stroke-width="2.4" stroke-linejoin="round"/><circle cx="382.0" cy="38.0" r="3.5" fill="#1a7f4b"/><text x="40.0" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 1</text><text x="102.18181818181819" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 3</text><text x="164.36363636363637" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 5</text><text x="226.54545454545456" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 7</text><text x="288.72727272727275" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 9</text><text x="350.90909090909093" y="170" font-size="11" fill="#7a8a91" text-anchor="middle" font-weight="400">wk 11</text><rect x="40" y="175" width="10" height="10" rx="2" fill="#0f7c7c"/><text x="55" y="184" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">library 78%</text><rect x="210" y="175" width="10" height="10" rx="2" fill="#2463c7"/><text x="225" y="184" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">secrets 83%</text><rect x="40" y="195" width="10" height="10" rx="2" fill="#5b3fb5"/><text x="55" y="204" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">unsafe-code 61%</text><rect x="210" y="195" width="10" height="10" rx="2" fill="#1a7f4b"/><text x="225" y="204" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">binary-licence 89%</text></svg></div></div>
+    <div class="card "><div class="card-h"><h2>Agent quality</h2><span class="meta">overrides · retries · tokens</span></div><div class="cb"><table class="tbl"><thead><tr><th>Agent</th><th>12-wk trend</th><th class="num">Now</th><th class="num">Tok / fix</th></tr></thead><tbody><tr><td><b>triage</b></td><td><svg width="96" height="26" viewBox="0 0 96 26"><polyline points="2.0,3.0 10.4,3.0 18.7,8.0 27.1,8.0 35.5,13.0 43.8,13.0 52.2,13.0 60.5,18.0 68.9,18.0 77.3,18.0 85.6,23.0 94.0,23.0" fill="none" stroke="#12303a" stroke-width="2" stroke-linejoin="round"/></svg></td><td class="num"><b>5%</b> <span class="mut">overrides</span></td><td class="num">—</td></tr><tr><td><b>library</b></td><td><svg width="96" height="26" viewBox="0 0 96 26"><polyline points="2.0,3.0 10.4,3.0 18.7,13.0 27.1,13.0 35.5,13.0 43.8,13.0 52.2,23.0 60.5,23.0 68.9,23.0 77.3,23.0 85.6,23.0 94.0,23.0" fill="none" stroke="#0f7c7c" stroke-width="2" stroke-linejoin="round"/></svg></td><td class="num"><b>0.2</b> <span class="mut">retries</span></td><td class="num">3.1k</td></tr><tr><td><b>secrets</b></td><td><svg width="96" height="26" viewBox="0 0 96 26"><polyline points="2.0,3.0 10.4,3.0 18.7,3.0 27.1,23.0 35.5,23.0 43.8,23.0 52.2,23.0 60.5,23.0 68.9,23.0 77.3,23.0 85.6,23.0 94.0,23.0" fill="none" stroke="#2463c7" stroke-width="2" stroke-linejoin="round"/></svg></td><td class="num"><b>0.1</b> <span class="mut">retries</span></td><td class="num">2.4k</td></tr><tr><td><b>unsafe-code</b></td><td><svg width="96" height="26" viewBox="0 0 96 26"><polyline points="2.0,3.0 10.4,8.0 18.7,8.0 27.1,8.0 35.5,13.0 43.8,13.0 52.2,18.0 60.5,18.0 68.9,18.0 77.3,23.0 85.6,23.0 94.0,23.0" fill="none" stroke="#5b3fb5" stroke-width="2" stroke-linejoin="round"/></svg></td><td class="num"><b>0.5</b> <span class="mut">retries</span></td><td class="num">6.2k</td></tr><tr><td><b>binary-licence</b></td><td><svg width="96" height="26" viewBox="0 0 96 26"><polyline points="2.0,3.0 10.4,3.0 18.7,3.0 27.1,3.0 35.5,3.0 43.8,3.0 52.2,23.0 60.5,23.0 68.9,23.0 77.3,23.0 85.6,23.0 94.0,23.0" fill="none" stroke="#1a7f4b" stroke-width="2" stroke-linejoin="round"/></svg></td><td class="num"><b>0.0</b> <span class="mut">retries</span></td><td class="num">1.8k</td></tr></tbody></table><div class="foot">Cost per fix = tokens × [rate per model]. Targets [placeholder].</div></div></div>
+    <div class="card "><div class="card-h"><h2>Repeat offenders</h2><span class="meta">repo · team · pattern</span></div><div class="cb"><table class="tbl"><thead><tr><th>Repo · team</th><th>Pattern</th><th>Per week</th></tr></thead><tbody><tr><td><b>orders-api</b><div class="mut">Team A</div></td><td>SQL built by string concatenation<div class="mut">9 in 12 wk · 3 reappeared</div></td><td><svg width="84" height="26" viewBox="0 0 84 26"><rect x="1.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="8.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="15.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="22.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="29.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="36.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="43.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="50.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="57.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="64.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="71.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="78.0" y="13.0" width="5.0" height="11.0" rx="1" fill="#d4570f" fill-opacity="1"/></svg></td></tr><tr><td><b>portal-ui</b><div class="mut">Team B</div></td><td>innerHTML with user input<div class="mut">7 in 12 wk · 2 reappeared</div></td><td><svg width="84" height="26" viewBox="0 0 84 26"><rect x="1.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="8.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="15.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="22.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="29.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="36.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="43.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="50.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="57.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="64.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="71.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="78.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/></svg></td></tr><tr><td><b>billing-svc</b><div class="mut">Team C</div></td><td>outdated Sample.Json (transitive)<div class="mut">6 in 12 wk · 1 reappeared</div></td><td><svg width="84" height="26" viewBox="0 0 84 26"><rect x="1.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="8.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="15.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="22.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="29.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="36.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="43.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="50.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="57.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="64.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="71.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="78.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/></svg></td></tr><tr><td><b>reports-job</b><div class="mut">Team A</div></td><td>secret in appsettings.json<div class="mut">4 in 12 wk · 2 reappeared</div></td><td><svg width="84" height="26" viewBox="0 0 84 26"><rect x="1.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="8.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="15.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="22.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="29.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="36.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="43.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="50.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="57.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="64.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/><rect x="71.0" y="2.0" width="5.0" height="22.0" rx="1" fill="#d4570f" fill-opacity="1"/><rect x="78.0" y="24.0" width="5.0" height="1.5" rx="1" fill="#d4570f" fill-opacity="0.25"/></svg></td></tr></tbody></table></div></div>
+  </div>
+  <div class="grid3">
+    <div class="card "><div class="card-h"><h2>Open critical / high by age</h2><span class="meta">per repo</span></div><div class="cb"><svg viewBox="0 0 392 206" width="100%" style="display:block" xmlns="http://www.w3.org/2000/svg" font-family="Inter,system-ui,Segoe UI,Arial,sans-serif"><text x="102" y="25" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">orders-api</text><rect x="112.0" y="12" width="30.2" height="18" rx="2" fill="#8fd4d1"/><text x="127.625" y="25" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><rect x="143.2" y="12" width="61.5" height="18" rx="2" fill="#e3b04b"/><text x="174.5" y="25" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text><rect x="205.8" y="12" width="92.8" height="18" rx="2" fill="#d4570f"/><text x="252.625" y="25" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">3</text><rect x="299.5" y="12" width="30.2" height="18" rx="2" fill="#c23a3a"/><text x="315.125" y="25" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><text x="336.75" y="25" font-size="12" fill="#12303a" text-anchor="start" font-weight="650">7</text><text x="102" y="59" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">portal-ui</text><rect x="112.0" y="46" width="61.5" height="18" rx="2" fill="#e3b04b"/><text x="143.25" y="59" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text><rect x="174.5" y="46" width="30.2" height="18" rx="2" fill="#d4570f"/><text x="190.125" y="59" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><rect x="205.8" y="46" width="61.5" height="18" rx="2" fill="#c23a3a"/><text x="237.0" y="59" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text><text x="274.25" y="59" font-size="12" fill="#12303a" text-anchor="start" font-weight="650">5</text><text x="102" y="93" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">billing-svc</text><rect x="112.0" y="80" width="30.2" height="18" rx="2" fill="#8fd4d1"/><text x="127.625" y="93" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><rect x="143.2" y="80" width="30.2" height="18" rx="2" fill="#e3b04b"/><text x="158.875" y="93" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><rect x="174.5" y="80" width="61.5" height="18" rx="2" fill="#d4570f"/><text x="205.75" y="93" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">2</text><text x="243.0" y="93" font-size="12" fill="#12303a" text-anchor="start" font-weight="650">4</text><text x="102" y="127" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">reports-job</text><rect x="112.0" y="114" width="30.2" height="18" rx="2" fill="#e3b04b"/><text x="127.625" y="127" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><rect x="143.2" y="114" width="30.2" height="18" rx="2" fill="#c23a3a"/><text x="158.875" y="127" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><text x="180.5" y="127" font-size="12" fill="#12303a" text-anchor="start" font-weight="650">2</text><text x="102" y="161" font-size="12" fill="#4a5b62" text-anchor="end" font-weight="600">patient-portal</text><rect x="112.0" y="148" width="30.2" height="18" rx="2" fill="#d4570f"/><text x="127.625" y="161" font-size="11" fill="#fff" text-anchor="middle" font-weight="700">1</text><text x="149.25" y="161" font-size="12" fill="#12303a" text-anchor="start" font-weight="650">1</text><rect x="12" y="188" width="10" height="10" rx="2" fill="#8fd4d1"/><text x="27" y="197" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">0–7 d</text><rect x="98" y="188" width="10" height="10" rx="2" fill="#e3b04b"/><text x="113" y="197" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">8–30 d</text><rect x="184" y="188" width="10" height="10" rx="2" fill="#d4570f"/><text x="199" y="197" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">31–90 d</text><rect x="270" y="188" width="10" height="10" rx="2" fill="#c23a3a"/><text x="285" y="197" font-size="12" fill="#4a5b62" text-anchor="start" font-weight="400">&gt; 90 d</text></svg></div></div>
+    <div class="card "><div class="card-h"><h2>Risk acceptances expiring</h2><span class="meta">next 30 days</span></div><div class="cb"><div class="exp"><span class="sev high">High</span><div class="et"><b>RA-S-014</b> · orders-api<div class="mut">vendored GPL-3.0 code</div></div><span class="days soon">6 d</span></div><div class="exp"><span class="sev high">High</span><div class="et"><b>RA-S-009</b> · billing-svc<div class="mut">Sample.Json 9.x pinned</div></div><span class="days soon">13 d</span></div><div class="exp"><span class="sev critical">Critical</span><div class="et"><b>RA-S-021</b> · portal-ui<div class="mut">legacy auth callback</div></div><span class="days ">24 d</span></div><div style="height:10px"></div><div class="card-h" style="padding:6px 0 6px;border:0"><h2>Licence exposure</h2><span class="meta">repos per flagged licence</span></div><div class="licg"><div class="lic"><span>GPL-3.0</span><i style="width:44px"></i><b>2</b></div><div class="lic"><span>AGPL-3.0</span><i style="width:22px"></i><b>1</b></div><div class="lic"><span>LGPL-2.1</span><i style="width:66px"></i><b>3</b></div><div class="lic"><span>Unknown</span><i style="width:88px"></i><b>4</b></div></div></div></div>
+    <div class="card "><div class="card-h"><h2>Early warning</h2><span class="meta">new CVEs in components in use</span></div><div class="cb"><div class="warn crit"><div class="wt">CVE-SAMPLE-0001 · critical</div><div class="wd">Sample.Logging 2.1.x is used in 7 repos. 7 findings opened, 2 human tasks raised.</div></div><div class="warn high"><div class="wt">Spreading package</div><div class="wd">Sample.Pdf 4.0 (flagged licence) added to 3 more repos in 4 weeks.</div></div><div class="warn med"><div class="wt">CVE-SAMPLE-0002 · high</div><div class="wd">Sample.Http 1.4 in 2 repos. Fix version available; library fixer queued.</div></div><div class="foot">Source: Black Duck BOM + CVE feed (ComponentExposureDaily). Alerts raise a human task; nothing is auto-merged.</div></div></div>
+  </div>
+  <div class="disclaimer">Illustrative sample. All numbers, repos, teams, packages and CVE ids on this tab are synthetic sample data (CVE-SAMPLE-*), not output of the recorded run. KPI targets are [placeholders] to agree. Controls on this tab are not wired to data.</div>
+</section>
+  <section class="view" id="v-connections" aria-label="Connections (mockup)">
+  <div class="cx-wrap">
+    <div class="cx-head">
+      <div>
+        <div class="cx-title"><h1>Connections</h1><span class="cx-mock" title="A mockup of the connections page: nothing here talks to a real system, and changes reset on reload"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 9v4"/><path d="M12 17h.01"/><circle cx="12" cy="12" r="10"/></svg>Mockup: not connected to real systems</span></div>
+        <div class="sub">Connect the agent to source control, scanners, models and ticketing. Each connector asks for the least access it needs.</div>
+      </div>
+      <div class="cx-sp"></div>
+      <div class="cx-dep">
+        <div class="seg" id="cxDep" role="group" aria-label="Deployment model"><button data-d="wipro" class="on">Wipro-hosted</button><button data-d="customer">Customer-hosted</button></div>
+        <div class="why" id="cxDepWhy"></div>
+      </div>
+      <button class="btn primary" id="cxAdd"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add connector</button>
+    </div>
+    <div class="cx-note"><span class="dot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
+      <span><b>Org admin approves once.</b> After that, teams choose repos and projects. The agent never gets merge or admin rights, and every token is short-lived and kept in Key Vault.</span></div>
+
+    <div class="cx-sec"><h2>Connectors</h2><span class="meta" id="cxCount"></span></div>
+    <div class="cx-grid" id="cxGrid"></div>
+
+    <div class="cx-sec"><h2>Coming soon</h2><span class="meta">on the roadmap</span></div>
+    <div class="cx-soon" id="cxSoon"></div>
+
+    <div class="cx-sec"><h2>Repository settings</h2><span class="meta">per repo · from the GitHub connection</span></div>
+    <div class="cx-repo"><div class="cx-rlist" id="cxRepos"></div><div class="cx-rbody" id="cxRepoBody"></div></div>
+    <div class="cx-disc">Mockup for discussion. Organisation, repos, projects and statuses are placeholders ([your-org]); "Connected (demo)" means connected in this page only. No network calls, tokens or sign-ins happen here, and everything resets when the page reloads.</div>
+  </div>
+</section>
+<div id="cxModal" role="dialog" aria-modal="true" aria-labelledby="cxMT"><div class="dlg" id="cxDlg"></div></div>
+<script>
+(() => {
+// MOCKUP data only. No fetch/XHR/WebSocket anywhere in this block.
+const $c = s => document.querySelector(s);
+const e = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const say = m => { const t = $c('#toast'); if (!t) return; t.textContent = m; t.classList.add('show'); clearTimeout(say.h); say.h = setTimeout(() => t.classList.remove('show'), 2600); };
+const C = [
+  {id:'github', name:'GitHub', cat:'Source control', mono:'GH', bg:'linear-gradient(140deg,#2b3137,#0d1117)', purpose:'Reads code and opens fix PRs for review', on:true, flow:true,
+   meta:() => `org <b>[your-org]</b> · ${S.github.length} repo${S.github.length === 1 ? '' : 's'}`, pickLabel:'repositories',
+   picks:[['[your-org]/orders-api', 'PR scan + nightly'], ['[your-org]/portal-ui', 'PR scan'], ['[your-org]/billing-svc', 'not enabled'], ['[your-org]/reports-job', 'not enabled']],
+   perms:[['ok', 'Contents: read and write', 'to read code and push fix branches (never to the default branch)'], ['ok', 'Pull requests: write', 'to open fix PRs and comment with evidence'],
+          ['ok', 'Checks: read', 'to see whether CI passed on a fix PR'], ['ok', 'Metadata: read', 'repo names and settings'],
+          ['no', 'No merge', 'merging stays a human action'], ['no', 'No admin', 'cannot change branch protection, members or secrets']],
+   app:'GitHub App “Security Triage & Fix Agent”'},
+  {id:'blackduck', name:'Black Duck', cat:'Findings input', mono:'BD', bg:'linear-gradient(140deg,#3a3f47,#1b1e23)', purpose:'Brings in open-source, licence and vulnerability findings', on:true,
+   meta:() => 'project group <b>[your-org]-apps</b> · read-only'},
+  {id:'models', name:'Azure OpenAI / OpenAI', cat:'Models', mono:'AI', bg:'linear-gradient(140deg,#3b82f6,#1d4ed8)', purpose:'Runs triage and fixes through the model gateway', on:true,
+   meta:() => '<b>small</b> + <b>strong</b> tiers · via gateway'},
+  {id:'jira', name:'Jira', cat:'Human tasks', mono:'J', bg:'linear-gradient(140deg,#2684ff,#0052cc)', purpose:'Raises human tasks and tracks risk acceptances', on:false, flow:true,
+   meta:() => S.jira.length ? `project${S.jira.length === 1 ? '' : 's'} <b>${e(S.jira.map(x => x.split(' ')[0]).join(', '))}</b>` : 'not set up', pickLabel:'projects',
+   picks:[['SEC · AppSec', 'human tasks'], ['RISK · Risk register', 'risk acceptances'], ['OPS · Platform ops', 'optional']],
+   perms:[['ok', 'Issues: create and comment', 'human tasks with the evidence pack attached'], ['ok', 'Issues: read status', 'to know when a task is done or a risk is accepted'],
+          ['ok', 'Projects: read', 'only the projects you pick next'], ['no', 'No delete', 'cannot delete or move issues'], ['no', 'No admin', 'cannot change workflows or permissions']],
+   app:'Jira (Atlassian) app “Security Triage & Fix Agent”'},
+  {id:'teams', name:'Microsoft Teams', cat:'Alerts', mono:'T', bg:'linear-gradient(140deg,#7b83eb,#4b53bc)', purpose:'Posts run summaries and early warnings to a channel', on:false,
+   meta:() => 'not set up'},
+  {id:'keyvault', name:'Azure Key Vault', cat:'Secrets', mono:'KV', bg:'linear-gradient(140deg,#0f7c7c,#0b5f60)', purpose:'Holds connector credentials; the agent gets short-lived tokens', on:true, real:true,
+   meta:() => 'vault <b>kv-secagent-[env]</b> · managed identity'},
+];
+const SOON = [['Azure DevOps', 'DO', 'linear-gradient(140deg,#2b88d8,#0063b1)', 'Repos and pipelines'], ['ServiceNow', 'SN', 'linear-gradient(140deg,#62d84e,#1f8a48)', 'Change and incident tickets'],
+  ['Slack', 'S', 'linear-gradient(140deg,#7e3b80,#4a154b)', 'Alerts and summaries'], ['Snyk · Trivy · Semgrep', 'SC', 'linear-gradient(140deg,#6b7f88,#3e4f57)', 'More scanner adapters'],
+  ['A2A partner agents', 'A2A', 'linear-gradient(140deg,#c77700,#8a5200)', 'Hand work to partner agents']];
+const DEP = {wipro: 'Wipro runs the agent; your org admin approves each connection once and can revoke it at any time.',
+             customer: 'Runs in your Azure tenant; your team owns every connection, credential and the Key Vault.'};
+const S = {github: ['[your-org]/orders-api', '[your-org]/portal-ui'], jira: [], repo: '[your-org]/orders-api', settings: {}};
+const FIXERS = [['secrets', 'Secrets'], ['library', 'Library'], ['unsafe', 'Unsafe code'], ['binary', 'Binary / licence'], ['framework', 'Framework', true], ['ui', 'UI', true]];
+const BUDGET = [['lean', 'Lean', '30k tokens / PR'], ['standard', 'Standard', '60k tokens / PR'], ['deep', 'Thorough', '120k tokens / PR']];
+const REVIEWERS = ['@appsec-team', '@repo-owners', '@platform-leads'];
+const conf = r => S.settings[r] || (S.settings[r] = {pr: true, nightly: r.endsWith('orders-api'), fixers: ['secrets', 'library', 'unsafe', 'binary'], reviewers: ['@appsec-team', '@repo-owners'], budget: 'standard'});
+const ico = (mono, bg, sm) => `<span class="cx-ico${sm ? ' sm' : ''}" style="background:${bg}">${e(mono)}</span>`;
+const pill = c => c.on ? `<span class="cx-st on"><i></i>${c.real ? 'Connected' : 'Connected (demo)'}</span>` : '<span class="cx-st off"><i></i>Not connected</span>';
+
+function render(){
+  $c('#cxGrid').innerHTML = C.map(c => `<div class="cx-card" id="cx-${c.id}">
+      <div class="cx-top">${ico(c.mono, c.bg)}<div><div class="cx-name">${e(c.name)}</div><div class="cx-cat">${e(c.cat)}</div></div>${pill(c)}</div>
+      <div class="cx-purpose">${e(c.purpose)}</div>
+      <div class="cx-foot"><span class="cx-meta">${c.on ? c.meta() : 'not set up'}</span><button class="btn${c.on ? '' : ' primary'}" data-cx="${c.id}">${c.on ? 'Manage' : 'Connect'}</button></div></div>`).join('');
+  $c('#cxCount').textContent = `${C.filter(c => c.on).length} of ${C.length} connected`;
+  document.querySelectorAll('#cxGrid [data-cx]').forEach(b => b.onclick = () => open(b.dataset.cx));
+  renderRepos();
+}
+function renderRepos(){
+  if (!S.github.includes(S.repo)) S.repo = S.github[0];
+  const gh = C[0].on && S.github.length;
+  $c('#cxRepos').innerHTML = gh ? S.github.map(r => `<div class="cx-ritem${r === S.repo ? ' on' : ''}" data-r="${e(r)}">${ico('GH', 'linear-gradient(140deg,#2b3137,#0d1117)', true)}<div><b>${e(r.split('/')[1])}</b><small>${conf(r).pr ? 'PR scan' : 'PR scan off'}${conf(r).nightly ? ' · nightly' : ''}</small></div></div>`).join('')
+    : '<div class="cx-ritem"><div><b>No repos yet</b><small>Connect GitHub to choose repos</small></div></div>';
+  document.querySelectorAll('#cxRepos [data-r]').forEach(x => x.onclick = () => { S.repo = x.dataset.r; renderRepos(); });
+  if (!gh){ $c('#cxRepoBody').innerHTML = '<div class="cx-row full"><div class="l"><b>Repository settings appear here</b><span>Connect GitHub and pick repositories first.</span></div></div>'; return; }
+  const r = S.repo, s = conf(r), sw = (k, on) => `<button class="cx-sw${on ? ' on' : ''}" data-k="${k}" aria-pressed="${on}" aria-label="${k}"></button>`;
+  const chip = (on, label, attrs, planned) => `<button class="cx-chip${on ? ' on' : ''}" ${attrs}${planned ? ' disabled title="Planned"' : ''}><span class="ck">${on ? '✓' : ''}</span>${e(label)}${planned ? ' <span style="font-weight:500">[planned]</span>' : ''}</button>`;
+  $c('#cxRepoBody').innerHTML = `<div class="cx-rh"><h3>${e(r)}</h3><span class="cx-st on"><i></i>via GitHub (demo)</span></div>
+    <div class="cx-rows">
+      <div class="cx-row"><div class="l"><b>PR-time scan</b><span>Triage and fix findings on every pull request</span></div>${sw('pr', s.pr)}</div>
+      <div class="cx-row"><div class="l"><b>Nightly backlog sweep</b><span>Work down existing findings on the default branch</span></div>${sw('nightly', s.nightly)}</div>
+      <div class="cx-row full"><div class="l"><b>Enabled fixers</b><span>Which fixers may open PRs in this repo</span></div><div class="cx-chips">${FIXERS.map(([k, l, p]) => chip(s.fixers.includes(k), l, `data-f="${k}"`, p)).join('')}</div></div>
+      <div class="cx-row"><div class="l"><b>Reviewers</b><span>Requested on every fix PR</span></div><div class="cx-chips">${REVIEWERS.map(x => chip(s.reviewers.includes(x), x, `data-rv="${x}"`)).join('')}</div></div>
+      <div class="cx-row"><div class="l"><b>Budget profile</b><span>${e(BUDGET.find(b => b[0] === s.budget)[2])}</span></div><div class="seg">${BUDGET.map(([k, l]) => `<button data-b="${k}" class="${s.budget === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    </div>
+    <div class="cx-pr"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M6 8.5v7M18 15.5V9a3 3 0 0 0-3-3h-4"/></svg>
+      <span>Changes go via PR to <code>rules/repos/${e(r.split('/')[1])}.yaml</code>: nothing changes until the PR is reviewed and merged.</span><button class="btn" id="cxPropose">Propose change</button></div>`;
+  const body = $c('#cxRepoBody');
+  body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { s[b.dataset.k] = !s[b.dataset.k]; renderRepos(); });
+  body.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { const k = b.dataset.f; s.fixers = s.fixers.includes(k) ? s.fixers.filter(x => x !== k) : s.fixers.concat(k); renderRepos(); });
+  body.querySelectorAll('[data-rv]').forEach(b => b.onclick = () => { const k = b.dataset.rv; s.reviewers = s.reviewers.includes(k) ? s.reviewers.filter(x => x !== k) : s.reviewers.concat(k); renderRepos(); });
+  body.querySelectorAll('[data-b]').forEach(b => b.onclick = () => { s.budget = b.dataset.b; renderRepos(); });
+  $c('#cxPropose').onclick = () => say(`Mockup: this would open a PR to rules/repos/${r.split('/')[1]}.yaml`);
+}
+// ---------- modal ----------
+const M = $c('#cxModal'), D = $c('#cxDlg');
+function close(){ M.classList.remove('open'); D.innerHTML = ''; }
+M.onclick = ev => { if (ev.target === M) close(); };
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && M.classList.contains('open')) close(); });
+function shell(c, title, sub, steps, body, foot){
+  D.innerHTML = `<div class="dh">${ico(c ? c.mono : '+', c ? c.bg : 'linear-gradient(140deg,#16a3a0,#0b5f60)')}<div><h3 id="cxMT">${e(title)}</h3><div class="s">${sub}</div></div><button class="x" aria-label="Close">✕</button></div>` +
+    (steps || '') + `<div class="db">${body}</div>` + (foot ? `<div class="df">${foot}</div>` : '');
+  D.querySelector('.x').onclick = close; M.classList.add('open');
+}
+function open(id){
+  const c = C.find(x => x.id === id); if (!c) return;
+  if (c.on) return manage(c);
+  if (c.flow) return flow(c, 0, c.id === 'github' ? (S.github.length ? S.github.slice() : ['[your-org]/orders-api', '[your-org]/portal-ui']) : (S.jira.length ? S.jira.slice() : ['SEC · AppSec', 'RISK · Risk register']));
+  shell(c, 'Connect ' + c.name, e(c.cat), '', `<p>The guided set-up for ${e(c.name)} is not part of this mockup yet. In the product it follows the same steps: access requested, scope, where secrets are kept, done.</p>`,
+    '<span class="note">Mockup: not connected to real systems</span><button class="btn primary" id="cxOk">OK</button>');
+  $c('#cxOk').onclick = close;
+}
+function flow(c, step, sel){
+  const names = ['Access', c.id === 'github' ? 'Repositories' : 'Projects', 'Secrets', 'Done'];
+  const steps = `<div class="steps">${names.map((n, i) => `<span class="${i === step ? 'on' : i < step ? 'done' : ''}">${i + 1} · ${n}</span>`).join('')}</div>`;
+  let body = '';
+  if (step === 0) body = `<h4>${e(c.app)} is requesting:</h4>` + c.perms.map(([k, t, s]) => `<div class="perm"><span class="pi ${k}">${k === 'ok' ? '✓' : '✕'}</span><div><b>${e(t)}</b><small>${e(s)}</small></div></div>`).join('') +
+    `<p style="margin:12px 0 0;font-size:12px;color:var(--ink-3)">Your org admin approves this once. You can narrow or revoke access at any time.</p>`;
+  if (step === 1) body = `<h4>Choose ${c.pickLabel} the agent may work on</h4>` + c.picks.map(([n, h]) => `<label class="pick"><input type="checkbox" value="${e(n)}" ${sel.includes(n) ? 'checked' : ''}><b>${e(n)}</b><small>${e(h)}</small></label>`).join('') +
+    `<p style="margin:6px 0 0;font-size:12px;color:var(--ink-3)">Only the ${c.pickLabel} you tick are visible to the agent.</p>`;
+  if (step === 2) body = `<h4>Where the credentials live</h4>` +
+    [['Stored in', '<b>Azure Key Vault</b> (kv-secagent-[env])'], ['Token type', '<b>Short-lived</b> installation tokens, refreshed per run'], ['Personal tokens', '<b>Never</b>: no personal access tokens, no shared passwords'],
+     ['Who can see it', 'Nobody reads the secret: the agent gets a token at run time'], ['Revoke', `Uninstall the app in ${e(c.name)} or disable the connector here`]].map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`).join('');
+  if (step === 3) body = `<div class="done"><div class="big">✓</div><h4 style="margin:0 0 4px">${e(c.name)} connected (demo)</h4><div>${sel.length} ${c.pickLabel} selected: ${e(sel.join(', ') || 'none')}</div>
+    <p style="font-size:12px;color:var(--ink-3);margin:10px 0 0">In-browser only: nothing was sent anywhere, and this resets when the page reloads.</p></div>`;
+  const back = step > 0 && step < 3 ? '<button class="btn" id="cxBack">Back</button>' : '';
+  const next = step < 2 ? '<button class="btn primary" id="cxNext">Continue</button>' : step === 2 ? '<button class="btn primary" id="cxNext">Connect</button>' : '<button class="btn primary" id="cxNext">Done</button>';
+  shell(c, 'Connect ' + c.name, `Step ${step + 1} of 4 · ${e(c.cat)}`, steps, body, `<span class="note">Mockup: not connected to real systems</span>${back}${next}`);
+  const read = () => step === 1 ? [...D.querySelectorAll('.pick input:checked')].map(x => x.value) : sel;
+  if (back) $c('#cxBack').onclick = () => flow(c, step - 1, read());
+  $c('#cxNext').onclick = () => {
+    const s2 = read();
+    if (step === 1 && !s2.length){ say(`Pick at least one of the ${c.pickLabel}`); return; }
+    if (step === 2){ c.on = true; if (c.id === 'github') S.github = s2; else S.jira = s2; render(); }
+    if (step === 3){ close(); const card = $c('#cx-' + c.id); if (card){ card.classList.add('flash'); card.scrollIntoView({block: 'nearest', behavior: 'smooth'}); } say(`${c.name} connected (demo, this page only)`); return; }
+    flow(c, step + 1, s2);
+  };
+}
+function manage(c){
+  const rows = [['Status', c.real ? 'Connected' : 'Connected (demo)'], ['Scope', c.meta()], ['Approved by', 'Org admin (once)'], ['Credentials', 'Azure Key Vault · short-lived tokens']];
+  shell(c, c.name, e(c.cat) + ' · ' + e(c.purpose), '', rows.map(([k, v]) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`).join('') +
+    (c.perms ? '<h4 style="margin-top:14px">Access granted</h4>' + c.perms.map(([k, t]) => `<div class="perm"><span class="pi ${k}">${k === 'ok' ? '✓' : '✕'}</span><div><b>${e(t)}</b></div></div>`).join('') : ''),
+    `<span class="note">Mockup: not connected to real systems</span>${c.flow ? '<button class="btn" id="cxEdit">Change scope</button>' : ''}<button class="btn" id="cxDisc">Disconnect (demo)</button><button class="btn primary" id="cxOk">Close</button>`);
+  $c('#cxOk').onclick = close;
+  $c('#cxDisc').onclick = () => { c.on = false; if (c.id === 'github') S.github = []; if (c.id === 'jira') S.jira = []; close(); render(); say(`${c.name} disconnected (demo)`); };
+  const ed = $c('#cxEdit'); if (ed) ed.onclick = () => flow(c, 1, c.id === 'github' ? S.github.slice() : S.jira.slice());
+}
+function picker(){
+  const all = C.map(c => ({c, n: c.name, sub: c.cat + ' · ' + c.purpose, st: c.on ? (c.real ? 'Connected' : 'Connected (demo)') : 'Connect'})).concat(SOON.map(([n, m, bg, p]) => ({c: {mono: m, bg}, n, sub: p, st: 'Coming soon', soon: true})));
+  shell(null, 'Add connector', 'Search the catalogue', '', `<input class="search" id="cxQ" placeholder="Search connectors (e.g. Jira, scanner, alerts)" autocomplete="off"><div id="cxPL"></div>`,
+    '<span class="note">Mockup: not connected to real systems</span>');
+  const draw = q => {
+    q = q.trim().toLowerCase();
+    const hit = all.filter(x => !q || (x.n + ' ' + x.sub).toLowerCase().includes(q));
+    $c('#cxPL').innerHTML = hit.map((x, i) => `<div class="pl" data-i="${all.indexOf(x)}">${ico(x.c.mono, x.c.bg, true)}<div class="t"><b>${e(x.n)}</b><small>${e(x.sub)}</small></div>` +
+      `<span class="cx-st ${x.soon ? 'soon' : x.c.on ? 'on' : 'off'}"><i></i>${x.st}</span></div>`).join('') || '<div class="empty">No connectors match. Ask us about a custom adapter.</div>';
+    document.querySelectorAll('#cxPL .pl').forEach(el => el.onclick = () => { const x = all[+el.dataset.i]; if (x.soon){ say(`${x.n}: coming soon`); return; } open(x.c.id); });
+  };
+  const q = $c('#cxQ'); q.oninput = () => draw(q.value); draw(''); setTimeout(() => q.focus(), 30);
+}
+$c('#cxSoon').innerHTML = SOON.map(([n, m, bg, p]) => `<div class="cx-card"><div class="cx-top">${ico(m, bg, true)}<div><div class="cx-name">${e(n)}</div><div class="cx-cat">${e(p)}</div></div></div><span class="cx-st soon" style="margin-left:0;align-self:flex-start"><i></i>Coming soon</span></div>`).join('');
+const dep = d => { document.querySelectorAll('#cxDep button').forEach(b => b.classList.toggle('on', b.dataset.d === d)); $c('#cxDepWhy').textContent = DEP[d]; };
+document.querySelectorAll('#cxDep button').forEach(b => b.onclick = () => dep(b.dataset.d));
+$c('#cxAdd').onclick = picker;
+dep('wipro'); render();
+setTimeout(() => { const l = document.querySelector('#cfgLabel'); if (l) l.title = l.textContent; }, 1500);
+window.__cx = {state: S, connectors: C};
+})();
+</script>
+  <section class="view" id="v-controls"></section>
+</div>
+<div class="toast" id="toast"></div>
+<script>window.SECAGENT_REPLAY = "run.json";</script>
+<script src="run.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>

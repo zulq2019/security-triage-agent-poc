@@ -1,0 +1,17 @@
+rules:
+  - id: secagent.csharp.sqli.string-concat
+    languages: [csharp]
+    severity: ERROR
+    message: SQL command text is built by string concatenation or interpolation with a variable (possible SQL injection).
+    metadata:
+      cwe: ["CWE-89"]
+      category: security
+      secagent_severity: high
+    patterns:
+      - pattern-either:
+          - pattern: $CMD.CommandText = "..." + $X + ...;
+          - pattern: $CMD.CommandText = $"...";
+          - pattern: new SqlCommand("..." + $X + ..., ...)
+          - pattern: new SqliteCommand("..." + $X + ..., ...)
+          - pattern: new SqlCommand($"...", ...)
+          - pattern: new SqliteCommand($"...", ...)

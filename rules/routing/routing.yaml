@@ -1,0 +1,45 @@
+# Plug-in registry / routing table (section 11.2). One entry per issue_type.
+# Adding an issue type = adapter + rule pack + fixer + verifier checks + golden tests, then an entry here.
+label: routing-2026-10-02.1
+scanners: [gitleaks, trivy, semgrep, binary_check]
+routes:
+  secret:
+    rule_pack: secret
+    fixer: secrets
+    verifier_checks: [rescan, no_new_findings, dotnet_test]
+    model_tier: strong
+    enabled_repos: ["*"]
+  vulnerable_dependency:
+    rule_pack: vulnerable_dependency
+    fixer: library
+    verifier_checks: [rescan, no_new_findings, dotnet_test]
+    model_tier: strong
+    enabled_repos: ["*"]
+  unsafe_code:
+    rule_pack: unsafe_code
+    fixer: unsafe_code
+    verifier_checks: [rescan, no_new_findings, dotnet_test]
+    model_tier: strong
+    enabled_repos: ["*"]
+  binary_artefact:
+    rule_pack: binary_artefact
+    fixer: binary_licence
+    verifier_checks: [rescan, no_new_findings, dotnet_test]
+    model_tier: small
+    enabled_repos: ["*"]
+  licence:
+    rule_pack: licence
+    fixer: binary_licence
+    verifier_checks: [rescan, no_new_findings]
+    model_tier: small
+    enabled_repos: ["*"]
+agents:   # tool allow-lists per agent (least privilege). Anything else is refused and logged.
+  scanners:        [scan.gitleaks, scan.trivy, scan.semgrep, scan.binary_check, git.clone, git.worktree, queue.publish]
+  orchestrator:    [queue.publish, queue.receive, finding.upsert, run.plan, github.find_pr, github.create_pr, git.push]
+  triage-agent:    [finding.read, code.snippet, prior_decision.read]
+  router:          [registry.read, ledger.read]
+  library:         [fs.read, fs.write, nuget.resolve, dotnet.restore, git.worktree, git.commit]
+  secrets:         [fs.read, fs.write, keyvault.reference, ticket.rotation_task, git.worktree, git.commit]
+  unsafe_code:     [fs.read, fs.write, code.snippet, git.worktree, git.commit]
+  binary_licence:  [fs.read, fs.write, fs.delete, licence.policy, ticket.human_task, git.worktree, git.commit]
+  verifier:        [scan.gitleaks, scan.trivy, scan.semgrep, scan.binary_check, dotnet.test, evidence.write]

@@ -1,0 +1,47 @@
+# Context assembly rules (section 6.6). Required components are never trimmed.
+label: context-2026-10-02.1
+snippet_context_lines: 4
+run_summary_max_tokens: 200
+agents:
+  triage-agent:
+    purpose: triage
+    prompt: triage
+    budget: 3000
+    required: [instructions, finding, rule_pack]
+    optional: [code_snippet, prior_decision, run_summary, tool_output]
+    trim_order: [run_summary, tool_output, prior_decision, code_snippet]
+  library:
+    purpose: fix
+    prompt: fix-library
+    budget: 3000
+    required: [instructions, finding, tool_output]
+    optional: [prior_decision, run_summary]
+    trim_order: [run_summary, prior_decision]
+  secrets:
+    purpose: fix
+    prompt: fix-secrets
+    budget: 2500
+    required: [instructions, finding, code_snippet]
+    optional: [rule_pack, run_summary]
+    trim_order: [run_summary, rule_pack]
+  unsafe_code:
+    purpose: fix
+    prompt: fix-unsafe-code
+    budget: 5000
+    required: [instructions, finding, code_snippet, rule_pack]
+    optional: [prior_decision, run_summary, tool_output]
+    trim_order: [run_summary, prior_decision, tool_output]
+  binary_licence:
+    purpose: fix
+    prompt: fix-licence
+    budget: 2500
+    required: [instructions, finding, rule_pack]
+    optional: [prior_decision, run_summary]
+    trim_order: [run_summary, prior_decision]
+  verifier:
+    purpose: summarise
+    prompt: summarise-fix
+    budget: 2500
+    required: [instructions, finding, tool_output]
+    optional: [run_summary]
+    trim_order: [run_summary]

@@ -1,0 +1,41 @@
+# Model gateway routing config (section 6.7). Local Ollama via its OpenAI-compatible endpoint.
+# Switching to Azure OpenAI / APIM = change provider/endpoint/deployments here (FR-34), no code change.
+label: gateway-2026-10-02.1
+provider: openai_compatible
+endpoint: http://localhost:11434/v1
+api_key_env: OLLAMA_API_KEY        # Ollama ignores the key; Azure would use Entra ID via APIM
+health_url: http://localhost:11434/api/tags
+output_reserve_tokens: 1024
+max_concurrent_calls: 1             # CPU-only box: serialise inference
+request_timeout_seconds: 600
+tiers:
+  small:
+    - { id: small-a, model: "qwen2.5:3b", version: "357c53fb659c", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0 }
+    - { id: small-b, model: "qwen2.5-coder:3b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0, fallback: true }
+  strong:
+    - { id: strong-a, model: "qwen2.5-coder:7b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0 }
+    - { id: strong-b, model: "qwen2.5-coder:3b", version: "local", context_window: 8192, cost_per_1k_in: 0, cost_per_1k_out: 0, fallback: true, note: "local stand-in for deployment B" }
+tier_order: [small, strong]
+task_tiers:
+  triage: small
+  verify: small
+  summarise: small
+  fix: strong
+quality_rules:
+  high_if_severity: [critical, high]
+  high_if_retry: true
+  high_if_confidence_below: 0.6
+latency_targets_ms:
+  pr: 120000
+  backlog: 900000
+# Hosted price book (USD per 1k tokens), used by the Usage view and the run cost meter when provider = openai | azureopenai
+# and the active deployment has no cost of its own (appsettings Small/StrongCostPer1kIn/Out).
+# PLACEHOLDERS ONLY: these are NOT real or current prices. They are round numbers so the cost charts can be demoed with
+# the placeholder model names from appsettings.json. Replace them with figures from your pricing page / Azure price sheet.
+# Rows priced from here are stored with price_source = "placeholder" and the dashboard tags them "placeholder price".
+# Local Ollama models are always $0 (price_source = "local").
+price_book:
+  - { provider: openai, tier: small, model: "gpt-6-luna", cost_per_1k_in: 0.001, cost_per_1k_out: 0.004, placeholder: true }
+  - { provider: openai, tier: strong, model: "gpt-6.1-sol", cost_per_1k_in: 0.005, cost_per_1k_out: 0.02, placeholder: true }
+  - { provider: azureopenai, tier: small, model: "<small-deployment-name>", cost_per_1k_in: 0.001, cost_per_1k_out: 0.004, placeholder: true }
+  - { provider: azureopenai, tier: strong, model: "<strong-deployment-name>", cost_per_1k_in: 0.005, cost_per_1k_out: 0.02, placeholder: true }

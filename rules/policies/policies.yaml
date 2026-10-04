@@ -1,0 +1,25 @@
+# Budgets, thresholds, authority and kill switch (stands in for Azure App Configuration).
+# Changed only by PR to the rules repo; the label below is recorded on every Run (config_snapshot).
+label: policy-2026-10-02.1
+kill_switch: false            # default; the dashboard toggle overrides at runtime (audited in .data/control)
+budgets:
+  pr:
+    tokens: 60000             # per-run token cap (local model: cost is 0, tokens are still capped)
+    cost: 0.0
+    max_fixes: 10
+    max_minutes: 45
+usage_budgets:                # period budgets for the Usage view (budget burn). POC values, not a finance-approved budget.
+  daily_tokens: 300000
+  monthly_tokens: 6000000
+  monthly_cost: 25.0          # USD; local models are $0, hosted rows use the gateway price book (placeholders today)
+thresholds:
+  confidence_min: 0.6         # below -> NEEDS_HUMAN
+  low_budget_fraction: 0.15   # below -> standard tasks to small tier; high tasks stop
+retries:
+  max_fix_retries: 2          # verifier failure -> retry up to 2 times, then NEEDS_HUMAN
+  max_schema_retries: 2       # invalid JSON from the model -> retry with same inputs
+authority:
+  agent_may_suppress: [low, medium, info]   # critical/high suppress -> SUPPRESS_PENDING (AppSec)
+  never_lower_secret_severity: true
+pr_mode:
+  scope: new_vs_base          # only findings whose fingerprint is not present on the PR base branch

@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "secagent/finding/1.1.0",
+  "title": "Canonical Finding (schema 1.1.0)",
+  "type": "object",
+  "required": [
+    "finding_id",
+    "schema_version",
+    "source_scanner",
+    "scanner_version",
+    "scanner_rule_id",
+    "issue_type",
+    "title",
+    "severity_scanner",
+    "repo",
+    "branch",
+    "commit_sha",
+    "fingerprint",
+    "occurrence_count",
+    "status",
+    "first_seen",
+    "last_seen",
+    "classification",
+    "raw_evidence_ref",
+    "sarif_ref",
+    "created_by_run"
+  ],
+  "properties": {
+    "finding_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "source_scanner": {
+      "type": "string",
+      "enum": [
+        "gitleaks",
+        "trivy",
+        "semgrep",
+        "binary_check",
+        "blackduck"
+      ]
+    },
+    "scanner_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scanner_rule_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issue_type": {
+      "type": "string",
+      "enum": [
+        "secret",
+        "vulnerable_dependency",
+        "unsafe_code",
+        "binary_artefact",
+        "licence"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "cve_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cwe_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "severity_scanner": {
+      "type": "string",
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "severity_effective": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info",
+        null
+      ]
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1
+    },
+    "branch": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pr_number": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "commit_sha": {
+      "type": "string",
+      "minLength": 7
+    },
+    "file_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "line_start": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "line_end": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "component_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "component_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fixed_version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "licence_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fix_group_key": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "occurrence_count": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "type": "string"
+    },
+    "bucket": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "first_seen": {
+      "type": "string"
+    },
+    "last_seen": {
+      "type": "string"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "confidential",
+        "restricted"
+      ]
+    },
+    "secret_hash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^hmac:[0-9a-f]{64}$"
+    },
+    "code_snippet_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "raw_evidence_ref": {
+      "type": "string",
+      "pattern": "^blob://"
+    },
+    "sarif_ref": {
+      "type": "string"
+    },
+    "created_by_run": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}
