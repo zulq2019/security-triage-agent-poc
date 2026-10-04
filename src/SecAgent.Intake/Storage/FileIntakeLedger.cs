@@ -41,6 +41,19 @@ public sealed class FileIntakeLedger : IIntakeLedger, IIntakeRecordQuery
         }
     }
 
+    /// <summary>Compare-and-swap on the claim token under the ledger lock. Atomic within one process (the dev / single-instance setup);
+    /// a multi-instance deployment uses a cloud ledger adapter with an ETag / rowversion check.</summary>
+    public bool TryReplace(string expectedClaimToken, IntakeRecord next)
+    {
+        lock (_lock)
+        {
+            var path = PathOf(next.Key);
+            if (!File.Exists(path) || Read(path) is not { } current || current.ClaimToken != expectedClaimToken) return false;
+            Update(next);
+            return true;
+        }
+    }
+
     public void Update(IntakeRecord record)
     {
         record.UpdatedAt = _clock.GetUtcNow().UtcDateTime;

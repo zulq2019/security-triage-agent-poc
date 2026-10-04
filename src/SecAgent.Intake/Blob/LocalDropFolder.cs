@@ -22,7 +22,8 @@ public sealed class LocalDropFolderBlobReader(IOptions<IntakeOptions> options) :
 }
 
 /// <summary>Dev stand-in for Blob + Event Grid: drop "&lt;name&gt;.sarif.json" (or any .json) plus "&lt;name&gt;.sarif.json.meta.json" into the drop folder.
-/// The payload is picked up once its sidecar exists; afterwards both files move to processed/ (or rejected/ with a .result.json).
+/// The payload is picked up once its sidecar exists; afterwards both files move to processed/ (or rejected/ with a .result.json). A retryable
+/// answer (503: intake disabled, same payload in progress) leaves them in place for the next scan.
 /// Turns files into <see cref="BlobCreatedEvent"/>s for <see cref="IBlobIntakeHandler"/>; reading is the <see cref="IBlobReader"/>'s job.
 /// Hosted service: watches only when Intake:DropWatcherEnabled is true; the constructor has no side effects.</summary>
 public sealed class LocalFileDropWatcher : IHostedService, IDisposable
@@ -77,6 +78,13 @@ public sealed class LocalFileDropWatcher : IHostedService, IDisposable
                     r = await _handler.HandleAsync(evt, ct);
                 }
                 catch (Exception e) when (e is JsonException or IOException) { r = IntakeResult.Rejected(400, "bad sidecar: " + e.Message); }
+                if (r.IsRetryable)
+                {
+                    // Intake disabled or the same payload in progress elsewhere: leave both files for the next scan.
+                    _log.LogInformation("intake drop {File} → {Status}, left in place for retry", _masker.Mask(Path.GetFileName(payload), false), r.StatusCode);
+                    done.Add((payload, r));
+                    continue;
+                }
                 var target = Path.Combine(_dir, r.IsSuccess ? "processed" : "rejected");
                 Directory.CreateDirectory(target);
                 var stamp = _clock.GetUtcNow().ToString("yyyyMMddHHmmssfff");

@@ -37,8 +37,10 @@ public interface IIntakeStep
 }
 
 /// <summary>Runs the registered steps in order: limits → duplicate fast path → parse → claim key → store raw → canonical findings → enqueue.
-/// Turns rejections into results (and logs them, masked). Nothing is stored for a payload rejected before the claim.</summary>
-public sealed class IntakePipeline(IEnumerable<IIntakeStep> steps, SecretMasker masker, ILogger<IntakePipeline> log) : IIntakeAcceptor
+/// Turns rejections into results (and logs them, masked). Nothing is stored for a payload rejected before the claim.
+/// If anything fails after the claim and before a run was requested (rejection, storage or queue error, cancellation), the claim is
+/// marked <see cref="IntakeStatus.Failed"/>, so the producer's retry takes it over at once instead of being told "duplicate".</summary>
+public sealed class IntakePipeline(IEnumerable<IIntakeStep> steps, IIntakeLedger ledger, SecretMasker masker, ILogger<IntakePipeline> log) : IIntakeAcceptor
 {
     readonly IIntakeStep[] _steps = steps.OrderBy(s => s.Order).ToArray();
 
@@ -55,7 +57,26 @@ public sealed class IntakePipeline(IEnumerable<IIntakeStep> steps, SecretMasker 
         {
             log.LogWarning("intake rejected ({Status}) {Repo}@{Sha} {Scanner} run {RunId}: {Reason}",
                 e.StatusCode, meta.Repo, meta.HeadSha[..7], meta.Scanner, meta.RunId, masker.Mask(e.Message, false));
+            ReleaseClaim(ctx, $"rejected ({e.StatusCode}): {e.Message}");
             return IntakeResult.Rejected(e.StatusCode, e.Message);
         }
+        catch (Exception e)
+        {
+            ReleaseClaim(ctx, e is OperationCanceledException ? "delivery cancelled" : $"processing failed: {e.GetType().Name}");
+            throw;
+        }
+    }
+
+    /// <summary>Marks this delivery's claim failed (only while it is still an unfinished claim; a queued record is left alone).</summary>
+    void ReleaseClaim(IntakeContext ctx, string reason)
+    {
+        if (ctx.Record is not { Status: IntakeStatus.Claimed } record) return;
+        try
+        {
+            record.Status = IntakeStatus.Failed;
+            record.Detail = masker.Mask(reason.Length <= 300 ? reason : reason[..300], false);
+            ledger.Update(record);
+        }
+        catch (Exception e) { log.LogError("intake {IntakeId}: could not release the claim (it frees up after the lease): {Error}", record.IntakeId, masker.Mask(e.Message, false)); }
     }
 }

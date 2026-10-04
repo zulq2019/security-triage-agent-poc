@@ -40,6 +40,10 @@ public interface IRawFindingStore
 public interface IIntakeLedger
 {
     bool TryClaim(IntakeRecord record, out IntakeRecord existing);
+    /// <summary>Takes over a failed or stale claim: replaces the stored record with <paramref name="next"/> only if the stored record still
+    /// carries <paramref name="expectedClaimToken"/> (compare-and-swap; an ETag / rowversion check in a cloud adapter). False = another
+    /// delivery took it over first.</summary>
+    bool TryReplace(string expectedClaimToken, IntakeRecord next);
     void Update(IntakeRecord record);
     IntakeRecord? Get(string key);
 }
@@ -99,6 +103,22 @@ public sealed record IntakeAuthResult(bool Ok, string? Error = null)
 {
     public static readonly IntakeAuthResult Success = new(true);
     public static IntakeAuthResult Fail(string error) => new(false, error);
+}
+
+/// <summary>A read request on the intake's own API (GET /api/intake): the request headers and whether the caller is on this machine
+/// without a proxy in between (only used when a loopback exemption is explicitly configured).</summary>
+public sealed record IntakeReadRequest(IReadOnlyDictionary<string, string> Headers, bool IsDirectLoopback);
+
+/// <summary>Strategy: one way to authorise a read of intake records (admin token, HMAC-signed request, explicit loopback exemption).
+/// The read authoriser asks every configured credential; any grant wins.</summary>
+public interface IIntakeReadCredential
+{
+    /// <summary>Human-readable name for errors and logs, e.g. "admin token".</summary>
+    string Name { get; }
+    /// <summary>False when this credential is not set up on the server (e.g. no admin token configured); it is then ignored.</summary>
+    bool IsConfigured { get; }
+    /// <summary>Null when the request does not present this credential; otherwise the check result.</summary>
+    IntakeAuthResult? Check(IntakeReadRequest request);
 }
 
 /// <summary>Where the shared HMAC secret comes from (environment variable locally; Key Vault reference / SecretClient in Azure).</summary>

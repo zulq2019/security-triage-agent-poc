@@ -12,6 +12,12 @@ public sealed class IntakeOptions
     public bool Enabled { get; set; } = true;
     /// <summary>Env var holding the shared HMAC secret (same value as the GitHub secret INTAKE_HMAC_SECRET). Unset = every request gets 503.</summary>
     public string HmacSecretEnv { get; set; } = "SECAGENT_INTAKE_HMAC_SECRET";
+    /// <summary>Env var holding the admin token for reading intake records (GET /api/intake, <c>Authorization: Bearer</c>).</summary>
+    public string AdminTokenEnv { get; set; } = "SECAGENT_INTAKE_ADMIN_TOKEN";
+    /// <summary>GET /api/intake also accepts a request signed with the intake HMAC secret (scope "_list", empty body).</summary>
+    public bool ListingAcceptsHmac { get; set; } = true;
+    /// <summary>Dev only: GET /api/intake without credentials from this machine (no proxy headers). Off by default; never behind a tunnel.</summary>
+    public bool ListingAllowsLoopback { get; set; }
     /// <summary>Signed timestamp must be within this many seconds of server time (replay window; the idempotency key covers replays inside it).</summary>
     public int TimestampToleranceSeconds { get; set; } = 300;
     public long MaxBodyBytes { get; set; } = 25L * 1024 * 1024;

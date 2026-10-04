@@ -31,12 +31,13 @@ public sealed class PayloadLimitsStep(IOptions<IntakeOptions> options) : IIntake
     }
 }
 
-/// <summary>Re-delivery of something already queued: answer from the ledger without re-parsing.</summary>
+/// <summary>Re-delivery of something already accepted (run requested): answer from the ledger without re-parsing. Unfinished or failed
+/// claims are not duplicates; they are decided by <see cref="ClaimStep"/>.</summary>
 public sealed class DuplicateFastPathStep(IIntakeLedger ledger) : IIntakeStep
 {
     public int Order => IntakeStepOrder.DuplicateFastPath;
     public Task<IntakeResult?> ExecuteAsync(IntakeContext ctx, CancellationToken ct) =>
-        Task.FromResult(ledger.Get(ctx.Key) is { } prior && prior.Status != IntakeStatus.Claimed ? IntakeResult.Duplicate(prior, ctx.BodySha256) : null);
+        Task.FromResult(ledger.Get(ctx.Key) is { } prior && IntakeStatus.IsAccepted(prior.Status) ? IntakeResult.Duplicate(prior, ctx.BodySha256) : null);
 }
 
 /// <summary>Selects the parser strategy for the format and parses (structure errors → 400/413/422 from the parser).</summary>
@@ -52,9 +53,14 @@ public sealed class ParseStep(IFindingParserRegistry parsers) : IIntakeStep
     }
 }
 
-/// <summary>Claims the idempotency key atomically. Another delivery holding the key wins, unless its claim is older than the lease
-/// (that attempt crashed before queueing): then this delivery resumes it. Writes after this point are idempotent
-/// (deterministic paths, write-once store, queue dedupe by MessageId).</summary>
+/// <summary>Claims the idempotency key atomically. When the key is already held:
+/// <list type="bullet">
+/// <item>accepted (run requested) → 200 duplicate for the same body, 409 for a different one;</item>
+/// <item>claimed and within the lease (another delivery is working on it) → 503 in_progress with Retry-After (409 for a different body);</item>
+/// <item>failed, or claimed but older than Intake:ClaimLeaseSeconds (that delivery crashed) → this delivery takes the claim over with a
+/// compare-and-swap on the claim token, so only one of several concurrent retries resumes it.</item>
+/// </list>
+/// Writes after this point are idempotent (deterministic paths, write-once store, queue dedupe by MessageId).</summary>
 public sealed class ClaimStep(IIntakeLedger ledger, IOptions<IntakeOptions> options, TimeProvider clock) : IIntakeStep
 {
     public int Order => IntakeStepOrder.Claim;
@@ -65,19 +71,29 @@ public sealed class ClaimStep(IIntakeLedger ledger, IOptions<IntakeOptions> opti
         var record = new IntakeRecord
         {
             IntakeId = Guid.NewGuid().ToString("N"), Key = ctx.Key, BodySha256 = ctx.BodySha256, Meta = ctx.Meta, Findings = parsed.Findings.Count,
-            ScannerVersion = parsed.ToolVersion, ReceivedAt = now, UpdatedAt = now,
+            ScannerVersion = parsed.ToolVersion, ReceivedAt = now, UpdatedAt = now, ClaimToken = NewToken(),
         };
         if (!ledger.TryClaim(record, out var existing))
         {
-            var stale = now - existing.UpdatedAt > TimeSpan.FromSeconds(options.Value.ClaimLeaseSeconds);
-            if (existing.Status != IntakeStatus.Claimed || existing.BodySha256 != ctx.BodySha256 || !stale)
+            if (IntakeStatus.IsAccepted(existing.Status) || existing.BodySha256 != ctx.BodySha256)
                 return Task.FromResult<IntakeResult?>(IntakeResult.Duplicate(existing, ctx.BodySha256));
+            var lease = TimeSpan.FromSeconds(options.Value.ClaimLeaseSeconds);
+            var age = now - existing.UpdatedAt;
+            if (existing.Status == IntakeStatus.Claimed && age <= lease)
+                return Task.FromResult<IntakeResult?>(IntakeResult.InProgress(existing, RetryAfter(lease - age)));
+            var expected = existing.ClaimToken;
+            existing.Status = IntakeStatus.Claimed; existing.ClaimToken = NewToken(); existing.Detail = null;
+            existing.Meta = ctx.Meta; existing.Findings = parsed.Findings.Count; existing.ScannerVersion = parsed.ToolVersion;
+            if (!ledger.TryReplace(expected, existing))
+                return Task.FromResult<IntakeResult?>(IntakeResult.InProgress(existing, RetryAfter(TimeSpan.Zero)));
             record = existing;
-            ledger.Update(record);   // renew the lease
         }
         ctx.Record = record;
         return Task.FromResult<IntakeResult?>(null);
     }
+
+    static string NewToken() => Guid.NewGuid().ToString("N");
+    static int RetryAfter(TimeSpan remaining) => Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds));
 }
 
 /// <summary>Stores the raw payload (redacted by its parser) write-once at intake/{repo}/{sha}/{scanner}-{run}.{ext}.</summary>

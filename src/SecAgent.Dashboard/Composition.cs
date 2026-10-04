@@ -7,10 +7,18 @@ using SecAgent.Core;
 // The intake itself is registered by services.AddSecAgentIntake(configuration) (SecAgent.Intake) and never sees these concrete types.
 
 /// <summary>Adapter: <see cref="IPrRunLauncher"/> over the pipeline's RunService (exactly what POST /api/runs does).</summary>
+/// The expected head SHA is checked by RunService on the same PR snapshot the run uses, so there is no window between check and start.
 sealed class RunServicePrRunLauncher(RunService runner) : IPrRunLauncher
 {
-    public async Task<Guid> StartPrRunAsync(string repo, int prNumber, CancellationToken ct) =>
-        (await runner.StartAsync(repo, prNumber, fresh: false, blockForReview: true)).State.Run.RunId;
+    public async Task<PrRunStart> StartPrRunAsync(string repo, int prNumber, string? expectedHeadSha, CancellationToken ct)
+    {
+        try
+        {
+            var h = await runner.StartAsync(repo, prNumber, fresh: false, blockForReview: true, expectedHeadSha);
+            return PrRunStart.Run(h.State.Run.RunId, h.State.Pr.HeadSha);
+        }
+        catch (PrHeadMovedException e) { return PrRunStart.Superseded(e.CurrentHeadSha); }
+    }
 }
 
 /// <summary>Adapter: <see cref="IRunAdmission"/> = kill switch off and no run active (the dashboard's one-run-at-a-time rule).</summary>

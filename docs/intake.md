@@ -76,6 +76,7 @@ commit scanned by the same workflow run is the same evidence).
 | `202 accepted` | stored, parsed, run queued. Body: `intake_id`, `idempotency_key`, `mode`, `findings`, `by_issue_type`, `raw`, `run_ticket`, `notes` |
 | `200 duplicate` | same key and same body already accepted (workflow retry); nothing new happens |
 | `409` | same key, **different** body: send a new run id |
+| `503 in_progress` | same key and body, but another delivery is still processing it (inside `Intake:ClaimLeaseSeconds`). Sent with `Retry-After`; retry (curl `--retry` honours it). Never reported as `duplicate`, because that delivery may still fail |
 | `400` | missing/invalid metadata, body not JSON |
 | `401` | missing/bad signature, wrong secret, timestamp outside the window, any signed header changed |
 | `403` | repo not in `Intake:AllowedRepos` |
@@ -84,7 +85,21 @@ commit scanned by the same workflow run is the same evidence).
 | `422` | wrong structure (e.g. SARIF version other than 2.1.0, no `runs`), or parsed findings fail `rules/schema/finding.schema.json` |
 | `503` | intake disabled, or the secret env var is not set (the endpoint never runs unauthenticated) |
 
-`GET /api/intake` lists the last 100 intakes (metadata, counts, status; never payload content).
+**Claims and retries.** The first delivery claims the idempotency key. If it fails after that (rejected, storage or queue error,
+cancelled), the claim is marked `failed` and the next retry takes it over at once. If it crashes without marking anything, the claim is
+taken over once it is older than `Intake:ClaimLeaseSeconds` (120 s). A takeover is a compare-and-swap on the record's claim token, so only
+one of several concurrent retries resumes it. Only an accepted intake (a run was requested) answers `200 duplicate`.
+
+`GET /api/intake` lists the last 100 intakes (metadata, counts, status; never payload content). It is **authenticated** like the POST:
+
+* `Authorization: Bearer <token>`, where the token is in the env var named by `Intake:AdminTokenEnv` (default `SECAGENT_INTAKE_ADMIN_TOKEN`; in Azure, a Key Vault reference). This is for operators and tools.
+* A request signed with the intake HMAC secret: the same `secagent-intake-v1` signature and timestamp window, with `_list` in place of the
+  format, no metadata headers and an empty body (`IntakeSignature.Sign(secret, "_list", {}, ts, [])`). Turn it off with
+  `Intake:ListingAcceptsHmac=false`. Holders of the secret can already push findings, so reading the metadata adds no privilege.
+* Dev only: `Intake:ListingAllowsLoopback=true` lets a caller on the same machine list without credentials, only if the request
+  carries no proxy headers (`Forwarded`, `X-Forwarded-For`, …). It is off by default; never enable it behind a tunnel or reverse proxy.
+
+With none of these configured the listing answers 503. With some configured but no valid credential presented, it answers 401.
 
 ## What happens to the findings
 
@@ -102,6 +117,9 @@ commit scanned by the same workflow run is the same evidence).
 * **Verification limit (by design)**: the local re-scan cannot confirm a Black Duck finding is gone, so a fix for an external finding
   is never auto-verified; it is marked "needs re-scan by that scanner" and goes to a human. The next Black Duck run on the fix PR
   closes the loop.
+* **Head SHA check**: the run is started for the queued head SHA only. `RunService` compares it with the PR head on the same snapshot
+  the run uses. If the PR moved on before the dispatcher got to it, nothing starts and the intake is marked `superseded`, with the old and
+  new SHA in `detail`: its findings would not apply to the new head, and the producer's scan of the new head brings fresh ones.
 * **Backlog mode** (no PR number, e.g. nightly on main): stored, parsed and recorded as `backlog_pending`. Slice 1 has no backlog
   runner yet; the data is ready for one.
 
@@ -158,7 +176,11 @@ should push the rapid-scan JSON (keep it with `--detect.cleanup=false`), and SAR
 
 | Key | Default | |
 |---|---|---|
-| `Enabled` | `true` | env `SECAGENT_INTAKE_ENABLED=0` turns it off |
+| `Enabled` | `true` | env `SECAGENT_INTAKE_ENABLED=0` turns it off, for the webhook **and** the Blob path (`503`; the drop folder leaves files in place) |
+| `ClaimLeaseSeconds` | `120` | an unfinished claim older than this is taken over by the next delivery; before that, retries get `503 in_progress` |
+| `AdminTokenEnv` | `SECAGENT_INTAKE_ADMIN_TOKEN` | **name** of the env var holding the bearer token for `GET /api/intake` |
+| `ListingAcceptsHmac` | `true` | `GET /api/intake` also accepts an HMAC-signed request (scope `_list`) |
+| `ListingAllowsLoopback` | `false` | dev only: unauthenticated listing from this machine without proxy headers |
 | `HmacSecretEnv` | `SECAGENT_INTAKE_HMAC_SECRET` | **name** of the env var holding the secret; the secret is never in a file |
 | `TimestampToleranceSeconds` | `300` | replay window |
 | `MaxBodyBytes` | `26214400` (25 MB) | |
@@ -211,6 +233,7 @@ in front). The blob reader itself exists: `AzureBlobReader` in `SecAgent.Intake.
 Local dev stand-in: set `SECAGENT_INTAKE_DROP_WATCHER=1`, then drop `x.sarif.json` plus `x.sarif.json.meta.json`
 (`{"format":"sarif","repo":"synthetic-org/sample-orders","pr":7,"ref":"feature/x","head_sha":"<40 hex>","scanner":"blackduck","run_id":"local-1"}`)
 into `.data/intake/drop/`. Processed files move to `processed/`, rejected ones to `rejected/` with a `.result.json` explaining why.
+Retryable answers (`503`: intake disabled, or the same payload in progress) leave both files where they are for the next scan.
 
 ### Option: GitHub OIDC instead of a shared secret (TODO)
 
