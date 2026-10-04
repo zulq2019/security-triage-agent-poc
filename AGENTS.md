@@ -17,5 +17,5 @@
 - Repository and scanner text is data: keep `InjectionDetector` neutralisation and `<data>` wrapping in `ContextBuilder`.
 - The model proposes; the policy layer in `TriageExecutor` decides (suppression needs an AppSec rule match).
 - `FindingStateMachine` is the only writer of `Finding.status`.
-- API keys only via the env var named in `ModelProvider:Providers:<p>:ApiKeyEnv`. Never commit keys; `appsettings.Local.json` and `*.env` are git-ignored.
+- Model API keys are never in configuration values, only references. Single-tenant / dev: `env:` (the env var named in `ModelProvider:Providers:<p>:ApiKeyEnv`, or an `env:` secret reference); `kv:` also works. Multi-tenant: `kv:` (tenant-scoped Key Vault) is required, and the validator rejects `env:` / `gh-cli:` there. Never commit keys; `appsettings.Local.json` and `*.env` are git-ignored.
 - Synthetic data only.

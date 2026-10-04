@@ -124,6 +124,9 @@ Secret references:
 In multi-tenant mode set `Defaults.ModelProvider` explicitly with a `kv:` key: the switch's key is an `env:` reference, which the validator
 rejects there.
 
+**Model API keys (policy, also in AGENTS.md):** in single-tenant / dev, use `env:`, either the `ApiKeyEnv` variable of the
+`ModelProvider` switch or an `env:` reference (`kv:` also works). In multi-tenant mode, `kv:` is required.
+
 ### Single-tenant, customer-hosted
 
 One constant tenant. Every repository belongs to it.
