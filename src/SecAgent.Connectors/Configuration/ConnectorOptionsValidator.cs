@@ -61,7 +61,23 @@ public sealed partial class ConnectorOptionsValidator(IConnectorCatalog catalog,
             }
             foreach (var key in c.Settings.Keys.Where(k => SecretLikeKey().IsMatch(k)))
                 errors.Add($"{path}:Settings:{key} looks like a secret; put a reference in {path}:Secret instead");
-            foreach (var f in connector.Describe().SetupFields.Where(f => f.Required))
+            var descriptor = connector.Describe();
+            var fields = descriptor.SetupFields.Where(f => f.Name is not ("BaseUrl" or "Secret")).ToDictionary(f => f.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var (key, value) in c.Settings)
+            {
+                // Settings are an allow-list per connector: an innocuous-looking key ("Credential") cannot smuggle a raw secret past the
+                // name check above. Simulated (in-memory) connectors never reach a real system and accept free-form settings.
+                if (!fields.TryGetValue(key, out var field))
+                {
+                    if (!descriptor.IsSimulated)
+                        errors.Add($"{path}:Settings:{key} is not a setting of {descriptor.Id} (allowed: {(fields.Count == 0 ? "none" : string.Join(", ", fields.Keys))}); secrets go in {path}:Secret as a reference");
+                }
+                else if (field.IsSecretReference && !string.IsNullOrWhiteSpace(value) && !new SecretRef(value).IsValid)
+                    errors.Add($"{path}:Settings:{key} must be a secret reference like env:NAME or kv:name, never a value");
+            }
+            if (connector is IConnectionRequirements requirements)
+                foreach (var problem in requirements.Validate(c.Settings)) errors.Add($"{path}: {descriptor.Id} {problem}");
+            foreach (var f in descriptor.SetupFields.Where(f => f.Required))
             {
                 var present = f.Name switch
                 {
@@ -69,7 +85,7 @@ public sealed partial class ConnectorOptionsValidator(IConnectorCatalog catalog,
                     "Secret" => !string.IsNullOrWhiteSpace(c.Secret),
                     _ => c.Settings.TryGetValue(f.Name, out var v) && !string.IsNullOrWhiteSpace(v),
                 };
-                if (!present) errors.Add($"{path}: {connector.Describe().Id} needs {(f.Name is "BaseUrl" or "Secret" ? f.Name : "Settings:" + f.Name)} ({f.Label})");
+                if (!present) errors.Add($"{path}: {descriptor.Id} needs {(f.Name is "BaseUrl" or "Secret" ? f.Name : "Settings:" + f.Name)} ({f.Label})");
             }
         }
         foreach (var kind in Enum.GetValues<ConnectorKind>())

@@ -93,7 +93,7 @@ tracker or notifier never fails a run; the run feed shows a warning instead.
 | `SecAgent.Connectors` | options + validation, tenant resolution, secret sources (`env:`), catalogue, client factory, decorators, audit sinks, REST client base, health service | Abstractions, Polly, Microsoft.Extensions.* |
 | `SecAgent.Connectors.GitHub` / `.Jira` / `.BlackDuck` / `.OpenAI` / `.Teams` / `.KeyVault` | one plug-in each | Abstractions + runtime only |
 | `SecAgent.Connectors.Fakes` | in-memory fakes for all five kinds, `FakeConnectorWorld` with recorded interactions, `memory:` secrets | Abstractions + runtime only |
-| `SecAgent.Agents` | the pipeline; uses `PipelineConnectors` (tenant resolver + one client factory per kind) | **Abstractions only** (architecture test) |
+| `SecAgent.Agents` | the pipeline; uses `PipelineConnectors` (tenant resolver + one client factory per kind, including the scanner source, which no slice-1 stage reads yet: the backlog runner and fixer upgrade guidance are its consumers to come) | **Abstractions only** (architecture test) |
 | `SecAgent.Dashboard` | composition root: `AddSecAgentConnectorPlugins` registers the runtime and every plug-in | everything |
 
 Architecture tests enforce this: the pipeline references no connector implementation, the abstractions reference nothing, plug-ins do not
@@ -103,7 +103,9 @@ reference each other, and only the dashboard references implementations.
 
 All of it is in the `Connectors` section of `src/SecAgent.Dashboard/appsettings.json` (override in `appsettings.Local.json` or with
 environment variables such as `Connectors__Tenants__local__IssueTracker__Provider=jira`). Configuration holds **provider ids, URLs and secret
-references only**. The validator rejects a secret-looking value in a setting, an unknown provider id, a missing required field, a
+references only**. The validator rejects a secret-looking value in a setting, a setting the connector does not declare (settings are
+an allow-list per connector, so a raw secret cannot hide under an innocuous key; simulated `fake` connectors are exempt), a
+connector-specific rule (Jira: `ProjectKey` is required, `Email` too for `AuthMode` basic, the default), an unknown provider id, a missing required field, a
 repository that would belong to two tenants, and (multi-tenant) a process-wide secret scheme such as `env:` (only tenant-scoped
 stores such as `kv:` are allowed), as well as a shared `Defaults` connection for anything except the model provider.
 
@@ -229,7 +231,9 @@ Set every kind to `fake` (for a demo or a test). Nothing leaves the process; the
 `Connectors:Resilience` (defaults in brackets): `MaxRetryAttempts` (3), `BaseDelay` (500 ms, exponential, jitter), `AttemptTimeout`
 (30 s), `ModelAttemptTimeout` (10 min, because local models are slow), `TotalTimeout` (120 s), `PermitsPerSecond` (10) and `QueueLimit` (50) for
 rate limiting, plus `CircuitBreakerFailureRatio` (0.5), `CircuitBreakerMinimumThroughput` (5), `CircuitBreakerSamplingDuration` (30 s) and
-`CircuitBreakerBreakDuration` (30 s). Circuits are kept **per tenant and per connector**, so one customer's broken Jira does not stop another's.
+`CircuitBreakerBreakDuration` (30 s). Circuits are kept **per tenant and per connector**, so one customer's broken Jira does not stop another's. The model gateway's own
+deployment breaker is per tenant as well, and usage rows are priced and labelled with the provider family of the connector that served the
+call (a tenant's Azure OpenAI connector is recorded as `azureopenai` even when the legacy `ModelProvider` switch says `ollama`).
 
 ## Connections page API
 

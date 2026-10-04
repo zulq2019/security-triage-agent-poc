@@ -6,7 +6,7 @@ namespace SecAgent.Connectors.Jira;
 /// <summary>Plug-in for Jira (provider id "jira"). Setup: BaseUrl (https://your-site.atlassian.net), Secret (API token or PAT reference),
 /// Settings: AuthMode = basic (Cloud: Email + API token) | bearer (Data Center personal access token), Email (basic only),
 /// ApiVersion = 3 (Cloud, rich text as ADF) | 2 (Data Center, plain text), ProjectKey (default project for human tasks).</summary>
-public sealed class JiraConnector(IHttpClientFactory httpFactory, ISecretProvider secrets, TimeProvider time) : IConnectorClientProvider<IIssueTrackerClient>
+public sealed class JiraConnector(IHttpClientFactory httpFactory, ISecretProvider secrets, TimeProvider time) : IConnectorClientProvider<IIssueTrackerClient>, IConnectionRequirements
 {
     public const string Id = "jira";
 
@@ -26,12 +26,23 @@ public sealed class JiraConnector(IHttpClientFactory httpFactory, ISecretProvide
             new("AuthMode", "basic (Cloud) or bearer (Data Center)", false, Example: "basic"),
             new("Email", "Account email (basic auth)", false, Example: "secagent-bot@example.invalid"),
             new("ApiVersion", "3 (Cloud) or 2 (Data Center)", false, Example: "3"),
-            new("ProjectKey", "Default project key", false, Example: "SEC"),
+            // Required: the pipeline files human tasks in the default project (RunOutbound passes no per-call project).
+            new("ProjectKey", "Default project key", true, Example: "SEC"),
         ],
         SelectionKind.Projects,
         Notes: "ASSUMPTION: built from the public Jira REST v3 docs; not yet verified against a live site.");
 
     public ConnectorDescriptor Describe() => Descriptor;
+
+    /// <summary>AuthMode is basic (default) or bearer; basic authentication needs Email.</summary>
+    public IEnumerable<string> Validate(IReadOnlyDictionary<string, string> settings)
+    {
+        var mode = settings.TryGetValue("AuthMode", out var m) && !string.IsNullOrWhiteSpace(m) ? m.Trim() : "basic";
+        if (!mode.Equals("basic", StringComparison.OrdinalIgnoreCase) && !mode.Equals("bearer", StringComparison.OrdinalIgnoreCase))
+            yield return $"Settings:AuthMode '{mode}' must be basic or bearer";
+        else if (mode.Equals("basic", StringComparison.OrdinalIgnoreCase) && !(settings.TryGetValue("Email", out var e) && !string.IsNullOrWhiteSpace(e)))
+            yield return "needs Settings:Email for AuthMode basic (the default); use AuthMode bearer for a Data Center personal access token";
+    }
 
     public IIssueTrackerClient CreateClient(ConnectionSettings connection) =>
         new JiraIssueTrackerClient(httpFactory.CreateClient(ConnectorHttp.ClientName(Id)), connection, secrets);

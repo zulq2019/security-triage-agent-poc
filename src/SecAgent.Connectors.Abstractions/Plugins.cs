@@ -9,6 +9,15 @@ public interface IConnector
     Task<HealthResult> CheckHealthAsync(ConnectionSettings connection, CancellationToken ct);
 }
 
+/// <summary>Optional, for a connector whose required settings depend on other settings (Jira: Email only for basic auth). Checked by
+/// configuration validation at start-up, after the descriptor's own required / allowed fields. Separate from <see cref="IConnector"/> so
+/// connectors without such rules implement nothing.</summary>
+public interface IConnectionRequirements
+{
+    /// <summary>Problems with these settings (setting names as in configuration), or none.</summary>
+    IEnumerable<string> Validate(IReadOnlyDictionary<string, string> settings);
+}
+
 /// <summary>Plug-in factory: builds the typed client for one resolved connection. Called by the runtime's client factory, never by agents.</summary>
 public interface IConnectorClientProvider<out TClient> : IConnector where TClient : class
 {

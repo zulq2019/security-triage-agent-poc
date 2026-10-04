@@ -22,6 +22,7 @@ public sealed class OpenAICompatibleModelConnector(ISecretProvider secrets, IHtt
             new("Secret", "API key reference (not needed for Ollama)", false, true, "kv:openai-api-key"),
             new("Flavor", "ollama | openai | azureopenai", false, Example: "openai"),
             new("HealthUrl", "Model list URL (Ollama only)", false, Example: "http://localhost:11434/api/tags"),
+            new("RequestTimeoutSeconds", "Per-request network timeout in seconds (default 180)", false, Example: "180"),
         ],
         Notes: "Managed identity for Azure OpenAI is an open item (API key reference today).");
 

@@ -85,6 +85,7 @@ public class ConnectorOptionsTests
     [InlineData("Connectors:Tenants:fabrikam:Repositories:0", "contoso/*", "more than one tenant")]
     [InlineData("Connectors:Defaults:SourceControl:Provider", "fake", "cannot share")]
     [InlineData("Connectors:Resilience:MaxRetryAttempts", "99", "Resilience")]
+    [InlineData("Connectors:Tenants:contoso:SourceControl:Settings:Credential", "ghp_literal_token_value", "not a setting of github")]
     public void Invalid_configuration_fails_at_startup_with_a_clear_message(string key, string value, string expected)
     {
         var config = All.MultiTenant();
@@ -93,6 +94,37 @@ public class ConnectorOptionsTests
         Assert.NotNull(e);
         Assert.True(e!.Message.Contains(expected, StringComparison.OrdinalIgnoreCase), e.Message);
         Assert.DoesNotContain("ghp_literal_token_value", e.Message);   // a misplaced secret is never echoed back
+    }
+
+    [Fact]
+    public void Settings_are_an_allow_list_per_connector_and_simulated_connectors_accept_free_form_settings()
+    {
+        var ok = All.MultiTenant();
+        ok["Connectors:Tenants:contoso:SourceControl:Settings:CloneBaseUrl"] = "https://github.example.invalid/";
+        ok["Connectors:Tenants:fabrikam:SourceControl:Settings:Anything"] = "simulated";
+        Assert.Null(All.Validate(ok));
+    }
+
+    [Theory]
+    [InlineData(null, "secagent-bot@example.invalid", "SEC", null)]
+    [InlineData("bearer", null, "SEC", null)]
+    [InlineData(null, null, "SEC", "Email")]
+    [InlineData("basic", null, "SEC", "Email")]
+    [InlineData("bearer", null, null, "ProjectKey")]
+    [InlineData("oauth", null, "SEC", "AuthMode")]
+    public void Jira_settings_needed_at_runtime_are_checked_at_startup(string? authMode, string? email, string? projectKey, string? expected)
+    {
+        var config = All.MultiTenant();
+        const string p = "Connectors:Tenants:contoso:IssueTracker:";
+        config[p + "Provider"] = "jira";
+        config[p + "BaseUrl"] = "https://synthetic.atlassian.example.invalid";
+        config[p + "Secret"] = "memory:contoso-jira-token";
+        if (authMode != null) config[p + "Settings:AuthMode"] = authMode;
+        if (email != null) config[p + "Settings:Email"] = email;
+        if (projectKey != null) config[p + "Settings:ProjectKey"] = projectKey;
+        var e = All.Validate(config);
+        if (expected == null) Assert.Null(e);
+        else Assert.True(e != null && e.Message.Contains(expected, StringComparison.Ordinal), e?.Message ?? "expected a validation error");
     }
 
     [Fact]

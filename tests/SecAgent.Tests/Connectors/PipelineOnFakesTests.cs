@@ -102,6 +102,18 @@ public class GatewayOnModelPortTests : IDisposable
     }
 
     [Fact]
+    public async Task Usage_records_the_provider_family_of_the_connector_that_served_the_call()
+    {
+        var (g, world) = Build();
+        world.Models.RespondToSchema("triage_output", _ => Synthetic.TriageJson);
+        var pack = Pack();
+        await g.CallAsync(pack, new CallSpec("triage", "triage-output", Repo: "acme/app"), new RunBudget(60000, 0), default);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var row = Assert.Single(new SqlStore(ConnectorE2EDatabase.ConnectionString).QueryUsage(new UsageFilter { From = today.AddDays(-1), To = today.AddDays(1), Run = pack.RunId }));
+        Assert.Equal("fake", row.Provider);   // not the legacy ModelProvider switch (ollama in the test config)
+    }
+
+    [Fact]
     public async Task Invalid_output_is_retried_then_rejected_by_the_schema()
     {
         var (g, world) = Build();
@@ -129,6 +141,39 @@ public class GatewayOnModelPortTests : IDisposable
         var e = await Assert.ThrowsAsync<ModelUnavailableException>(() => g.CallAsync(Pack(), new CallSpec("triage", "triage-output", Repo: "acme/app"), new RunBudget(60000, 0), default));
         Assert.Contains("OPENAI_API_KEY", e.Message);
         Assert.Single(world.InteractionsFor(ConnectorKind.ModelProvider, "model.complete:fault"));
+    }
+}
+
+/// <summary>Gateway state that must not leak across tenants (multi-tenant model, two fake tenants).</summary>
+[Collection(ConnectorE2EDatabase.Collection)]
+public class GatewayTenantIsolationTests : IDisposable
+{
+    readonly List<Guid> _runs = [];
+    public void Dispose() => ConnectorE2EDatabase.Cleanup(_runs);
+    ContextPack Pack() { var p = Synthetic.Pack(); _runs.Add(p.RunId); return p; }
+
+    [Fact]
+    public async Task One_tenants_failing_deployments_do_not_trip_the_breaker_for_another_tenant()
+    {
+        var world = new FakeConnectorWorld();
+        var config = All.TwoFakeTenants();
+        // Keep the connector-level (per-tenant) breaker and retries out of the way: this test is about the gateway's own counts.
+        config["Connectors:Resilience:CircuitBreakerMinimumThroughput"] = "1000";
+        config["Connectors:Resilience:MaxRetryAttempts"] = "0";
+        using var sp = ConnectorTestKit.Services(config, b => b.AddFakeConnectors(world));
+        var g = new ModelGateway(TestEnv.Cfg, new SqlStore(ConnectorE2EDatabase.ConnectionString),
+            new KillSwitch(Path.Combine(Path.GetTempPath(), "ks-" + Guid.NewGuid()), false), new SchemaValidator(TestEnv.Cfg, new JsonSchemaCache()), PipelineConnectors.From(sp));
+        world.Models.RespondToSchema("triage_output", _ => Synthetic.TriageJson);
+        world.FailNext("model.complete", new ConnectorException("synthetic 503", true, System.Net.HttpStatusCode.ServiceUnavailable), times: 1000);
+
+        var tenantA = new CallSpec("triage", "triage-output", Repo: "org-a/app");
+        for (var i = 0; i < 3; i++)
+            Assert.Contains("All deployments failed", (await Assert.ThrowsAsync<ModelUnavailableException>(() => g.CallAsync(Pack(), tenantA, new RunBudget(60000, 0), default))).Message);
+        Assert.Contains("No available deployment", (await Assert.ThrowsAsync<ModelUnavailableException>(() => g.CallAsync(Pack(), tenantA, new RunBudget(60000, 0), default))).Message);
+
+        // Tenant b still gets candidates (its calls are attempted, here failing on the remaining synthetic faults), not an open breaker.
+        var tenantB = new CallSpec("triage", "triage-output", Repo: "org-b/app");
+        Assert.Contains("All deployments failed", (await Assert.ThrowsAsync<ModelUnavailableException>(() => g.CallAsync(Pack(), tenantB, new RunBudget(60000, 0), default))).Message);
     }
 }
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using SecAgent.Connectors;
@@ -32,7 +33,9 @@ public sealed class ModelGateway
 {
     readonly ConfigSnapshot _cfg; readonly SqlStore _store; readonly KillSwitch _kill; readonly SchemaValidator _validator; readonly PipelineConnectors _connectors;
     readonly SemaphoreSlim _gate;
-    readonly Dictionary<string, int> _failures = new();
+    /// <summary>Circuit breaker counts per (tenant, deployment): one tenant's failing connector never removes a deployment for another
+    /// tenant. Concurrent: up to MaxConcurrentCalls calls update it at once.</summary>
+    readonly ConcurrentDictionary<(string Tenant, string Deployment), int> _failures = new();
 
     public ModelGateway(ConfigSnapshot cfg, SqlStore store, KillSwitch kill, SchemaValidator validator, PipelineConnectors connectors)
     {
@@ -41,7 +44,15 @@ public sealed class ModelGateway
     }
 
     /// <summary>The model provider of the repository's tenant (multi-tenant: no repository = no tenant = refused, never a fallback).</summary>
-    IModelProviderClient ModelClient(CallSpec spec) => _connectors.Models.ForTenant(_connectors.Tenants.ForRepository(spec.Repo ?? ""));
+    IModelProviderClient ModelClient(CallSpec spec) => _connectors.Models.ForTenant(TenantOf(spec));
+
+    string TenantOf(CallSpec spec) => _connectors.Tenants.ForRepository(spec.Repo ?? "");
+
+    int Failures(string tenant, DeploymentConfig d) => _failures.GetValueOrDefault((tenant, d.Id));
+
+    /// <summary>Provider for pricing and usage rows: the family of the connector that served the call (a tenant's Azure OpenAI connector
+    /// is priced as azureopenai even when the legacy ModelProvider switch says ollama).</summary>
+    static string ProviderOf(IModelProviderClient client) => client.ProviderFamily.ToLowerInvariant();
 
     async Task<HashSet<string>> AvailableModelsAsync(CallSpec spec, CancellationToken ct)
     {
@@ -79,10 +90,11 @@ public sealed class ModelGateway
             if (est > budget.Remaining) throw new BudgetExceededException($"Run token budget exhausted ({budget.Remaining} left, call needs ~{est}).");
         }
         var available = await AvailableModelsAsync(spec, ct);
+        var tenant = TenantOf(spec);   // resolvable here: AvailableModelsAsync refused an unknown tenant
         var candidates = g.Tiers[tier]
             .Where(d => available.Contains(d.Model) || available.Contains(d.Model + ":latest"))
             .Where(d => d.ContextWindow >= est)
-            .Where(d => _failures.GetValueOrDefault(d.Id) < 3)  // circuit breaker
+            .Where(d => Failures(tenant, d) < 3)  // circuit breaker, per tenant
             .OrderBy(d => d.Fallback).ToList();
         if (candidates.Count == 0) throw new ModelUnavailableException($"No available deployment in tier {tier} (pausing for human / resume from checkpoint)");
         if (candidates[0].Fallback) reasons.Add("primary deployment unavailable: fallback deployment of the same tier");
@@ -106,6 +118,8 @@ public sealed class ModelGateway
         if (!pack.MaskingApplied) throw new InvalidOperationException("Refusing to send a context pack without masking (FR-37)");
         if (pack.OverBudget) throw new OverBudgetPackException($"Required context exceeds the {pack.AgentId} budget ({pack.TokenBudget} tokens)");
         var (rd, candidates) = await RouteAsync(pack, spec, budget, ct);
+        var tenant = TenantOf(spec);
+        var provider = ProviderOf(ModelClient(spec));
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _kill.Token);
         await _gate.WaitAsync(linked.Token);
         using var span = Telemetry.Source.StartActivity($"model.call {spec.TaskType}");
@@ -123,16 +137,16 @@ public sealed class ModelGateway
                 try
                 {
                     var json = await InvokeWithSchemaRetriesAsync(d, pack, spec, rd, linked.Token);
-                    _failures[d.Id] = 0;
+                    _failures[(tenant, d.Id)] = 0;
                     rd.LatencyMs = (int)sw.ElapsedMilliseconds;
-                    var price = UsageMath.PriceFor(_cfg.Gateway, Provider, d.Model, d);
+                    var price = UsageMath.PriceFor(_cfg.Gateway, provider, d.Model, d);
                     rd.Cost = UsageMath.Cost(rd.TokensIn, rd.TokensOut, price);
                     rd.Outcome = "ok";
                     budget.Add(rd.TokensIn + rd.TokensOut, rd.Cost);
                     span?.SetTag("gen_ai.usage.input_tokens", rd.TokensIn); span?.SetTag("gen_ai.usage.output_tokens", rd.TokensOut);
                     span?.SetTag("secagent.usage.cost", rd.Cost);
                     _store.InsertRouting(rd);
-                    RecordUsage(rd, pack, spec, price.Source, span);
+                    RecordUsage(rd, pack, spec, provider, price.Source, span);
                     return new GatewayResult(json, rd, sw.Elapsed.TotalSeconds);
                 }
                 catch (SchemaInvalidException) { throw; }
@@ -143,7 +157,7 @@ public sealed class ModelGateway
                 }
                 catch (Exception e) when (e is ConnectorException or HttpRequestException or TimeoutException or IOException)
                 {
-                    last = e; _failures[d.Id] = _failures.GetValueOrDefault(d.Id) + 1;
+                    last = e; _failures.AddOrUpdate((tenant, d.Id), 1, (_, n) => n + 1);
                 }
             }
             throw new ModelUnavailableException($"All deployments failed: {last?.Message}");
@@ -153,21 +167,19 @@ public sealed class ModelGateway
             rd.LatencyMs = (int)sw.ElapsedMilliseconds;
             rd.Outcome = e is OperationCanceledException && _kill.IsOn ? "cancelled_kill_switch" : e.GetType().Name;
             var dep = candidates.FirstOrDefault(c => c.Id == rd.Deployment);
-            var price = UsageMath.PriceFor(_cfg.Gateway, Provider, rd.ChosenModelId, dep);
+            var price = UsageMath.PriceFor(_cfg.Gateway, provider, rd.ChosenModelId, dep);
             rd.Cost = UsageMath.Cost(rd.TokensIn, rd.TokensOut, price);   // tokens spent on failed attempts still cost money on a hosted provider
             budget.Add(rd.TokensIn + rd.TokensOut, rd.Cost);
             _store.InsertRouting(rd);
-            RecordUsage(rd, pack, spec, price.Source, span);
+            RecordUsage(rd, pack, spec, provider, price.Source, span);
             span?.SetStatus(ActivityStatusCode.Error, e.Message);
             throw;
         }
         finally { _gate.Release(); }
     }
 
-    string Provider => UsageMath.ProviderOf(_cfg.Gateway);
-
     /// <summary>One ModelUsage row per call (usage/cost observability). Never fails the call: a usage write error is tagged on the span.</summary>
-    void RecordUsage(RoutingDecision rd, ContextPack pack, CallSpec spec, string priceSource, Activity? span)
+    void RecordUsage(RoutingDecision rd, ContextPack pack, CallSpec spec, string provider, string priceSource, Activity? span)
     {
         try
         {
@@ -175,7 +187,7 @@ public sealed class ModelGateway
             {
                 RoutingId = rd.RoutingId, ContextPackId = pack.ContextPackId, RunId = rd.RunId, TsUtc = rd.DecidedAt, Repo = spec.Repo, PrNumber = spec.PrNumber,
                 Mode = spec.TriggerType, AgentId = pack.AgentId, TaskPurpose = spec.TaskType, Tier = rd.Tier, ModelId = rd.ChosenModelId, ModelVersion = rd.ModelVersion,
-                Deployment = rd.Deployment, Provider = Provider, InputTokens = rd.TokensIn, OutputTokens = rd.TokensOut, LatencyMs = rd.LatencyMs, Cost = rd.Cost,
+                Deployment = rd.Deployment, Provider = provider, InputTokens = rd.TokensIn, OutputTokens = rd.TokensOut, LatencyMs = rd.LatencyMs, Cost = rd.Cost,
                 PriceSource = priceSource, Outcome = UsageMath.Outcome(rd.Outcome, rd.SchemaAttempts, rd.FallbackUsed), OutcomeDetail = rd.Outcome == "ok" ? null : rd.Outcome,
                 SchemaAttempts = rd.SchemaAttempts, FallbackUsed = rd.FallbackUsed, TraceId = rd.TraceId,
             });
