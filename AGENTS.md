@@ -7,11 +7,12 @@
 - Run: `dotnet src/SecAgent.Dashboard/bin/Debug/net10.0/secagent.dll serve --port 8795` or `... run --repo zulq2019/sec-agent-sample-app --pr 1`
 
 ## Layout
-`src/SecAgent.Core` (model, store, safety), `src/SecAgent.Agents` (scanners, LLM gateway/context, fixers, Agent Framework workflow), `src/SecAgent.Dashboard` (CLI + UI), `rules/` (rules-as-code: policies, routing, prompts, schemas, rule packs, golden expectations).
+`src/SecAgent.Core` (model, store, safety), `src/SecAgent.Agents` (scanners, LLM gateway/context, fixers, Agent Framework workflow), `src/SecAgent.Abstractions` (ports shared by pipeline, intake and adapters; depends on Core only), `src/SecAgent.Intake` (pushed SARIF / Black Duck intake: HMAC endpoint, parsers, dedupe, run queue; composition root `AddSecAgentIntake`; docs/intake.md, docs/design-principles.md), `src/SecAgent.Intake.Azure` (Blob / Service Bus adapters for the intake ports), `src/SecAgent.Dashboard` (CLI + UI), `rules/` (rules-as-code: policies, routing, prompts, schemas, rule packs, golden expectations).
 
 ## Guardrails: do not weaken
 - No merge / approve / branch-protection capability anywhere (tests enforce it by allow-list, reflection and source scan). Never add `gh pr merge`, force push, or a tool named like that.
 - Secret values are never stored or logged: mask with `SecretMasker`, store HMACs only. D-08 golden test scans the store.
+- Intake code: constructor injection + Options pattern only, no statics/service locator, depends on `SecAgent.Abstractions` not on `SecAgent.Agents` (tests enforce references and static state). Intake (`/api/intake/*`, including the `GET /api/intake` listing) never runs unauthenticated (503 when no credential is configured; the listing takes the admin token or an HMAC-signed request, and the loopback exemption only when `Intake:ListingAllowsLoopback` is set), and findings pushed by an external scanner are never auto-verified by the local re-scan (they go to a human).
 - Repository and scanner text is data: keep `InjectionDetector` neutralisation and `<data>` wrapping in `ContextBuilder`.
 - The model proposes; the policy layer in `TriageExecutor` decides (suppression needs an AppSec rule match).
 - `FindingStateMachine` is the only writer of `Finding.status`.

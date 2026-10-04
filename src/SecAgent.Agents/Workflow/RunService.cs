@@ -59,10 +59,14 @@ public sealed class RunService(AgentServices s)
     public static Handle? Get(Guid id) => Handles.TryGetValue(id, out var h) ? h : null;
     public static bool AnyActive => Handles.Values.Any(h => !h.Completion.IsCompleted && h.PendingReview == null);
 
-    public async Task<Handle> StartAsync(string repo, int prNumber, bool fresh, bool blockForReview)
+    /// <param name="expectedHeadSha">When set, the run starts only if the PR head (on the snapshot this run uses) is that commit;
+    /// otherwise <see cref="PrHeadMovedException"/> is thrown and nothing is recorded.</param>
+    public async Task<Handle> StartAsync(string repo, int prNumber, bool fresh, bool blockForReview, string? expectedHeadSha = null)
     {
         s.Kill.ThrowIfOn("start run");
         var pr = await GitWorkspace.GetPrAsync(repo, prNumber, CancellationToken.None);
+        if (expectedHeadSha != null && !string.Equals(pr.HeadSha, expectedHeadSha, StringComparison.OrdinalIgnoreCase))
+            throw new PrHeadMovedException(repo, prNumber, expectedHeadSha, pr.HeadSha);
         var budgetCfg = s.Cfg.Policies.Budgets["pr"];
         var run = new RunRecord
         {
@@ -197,4 +201,12 @@ public sealed class RunService(AgentServices s)
         await h.Run.SendResponseAsync(req.CreateResponse(new ReviewResponse(runId, decision)));
         return true;
     }
+}
+
+/// <summary>The PR head is no longer the commit a run was requested for (a newer push arrived in between).</summary>
+public sealed class PrHeadMovedException(string repo, int prNumber, string expectedHeadSha, string currentHeadSha)
+    : Exception($"{repo} PR #{prNumber} head moved from {expectedHeadSha[..Math.Min(7, expectedHeadSha.Length)]} to {currentHeadSha[..Math.Min(7, currentHeadSha.Length)]}")
+{
+    public string ExpectedHeadSha { get; } = expectedHeadSha;
+    public string CurrentHeadSha { get; } = currentHeadSha;
 }
