@@ -3,7 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Agents.AI.Workflows;
 using SecAgent.Abstractions;
+using SecAgent.Connectors;
 using SecAgent.Agents.Llm;
+using SecAgent.Agents.Policy;
 using SecAgent.Agents.Repo;
 using SecAgent.Agents.Scanners;
 using SecAgent.Core;
@@ -175,13 +177,13 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
         }
         var e = Feed.Entry("orch", $"opening fix PR for {FixerName(m.FixerId)} · {m.Branch}");
         var taken = S.Store.TryTake(key, "pr", TimeSpan.FromMinutes(30));
-        GitHubPrs.Pr? pr = null;
+        PullRequestSummary? pr = null;
         if (taken is { Status: "completed" })
         {
             // Ledger hit: only reuse the recorded PR if it is still open in this repo and targets the current PR head.
             var n = FixKeys.PrNumber(taken.ResultRef);
             var cur = n is int num && FixKeys.PrUrlInRepo(taken.ResultRef, R.Pr.Repo)
-                ? await S.Tools.RunAsync("orchestrator", "github.get_pr", $"#{num} (ledger hit {key[..20]}…) revalidate", Feed, e, () => GitHubPrs.GetAsync(R.Pr.Repo, num, Ct), Ct)
+                ? await S.Tools.RunAsync("orchestrator", "github.get_pr", $"#{num} (ledger hit {key[..20]}…) revalidate", Feed, e, () => GetSummaryAsync(num), Ct)
                 : null;
             var d = PrReuse.Decide(cur, R.Pr.Repo, R.Pr.HeadRef);
             if (d.Reuse) pr = cur;
@@ -197,7 +199,7 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
             Feed.Update(e, "orch", $"PR creation for {m.Branch} already in progress elsewhere (ledger) · skipped", "warn");
             g.Outcome = "pr_reused"; return;
         }
-        pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => GitHubPrs.FindByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
+        pr ??= await S.Tools.RunAsync("orchestrator", "github.find_pr", $"head={m.Branch} state=all", Feed, e, () => Scm.FindPullRequestByHeadAsync(R.Pr.Repo, m.Branch, Ct), Ct);
         var reused = pr != null && PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef).Reuse;   // an open PR against another base is not reused
         var branch = m.Branch;
         try
@@ -216,12 +218,13 @@ public sealed class OrchestratorExecutor(AgentServices s, RunState r) : StepBase
                 try
                 {
                     // A remote branch without an open PR (e.g. an earlier crashed run) is never overwritten: push under a run-suffixed name instead.
-                    if (await GitWorkspace.RemoteBranchExistsAsync(m.Worktree, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
-                    await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e, () => GitWorkspace.PushAsync(m.Worktree, m.Branch, Ct, branch), Ct);
+                    if (await Scm.BranchExistsAsync(R.Pr.Repo, branch, Ct)) branch = $"{m.Branch}-r{Short(RunId.ToString("N"))}";
+                    await S.Tools.RunAsync("orchestrator", "git.push", $"origin {branch} (no force)", Feed, e,
+                        () => Scm.PublishBranchAsync(new BranchPublishRequest(R.Pr.Repo, m.Worktree, branch), Ct), Ct);
                     var title = PrTitle(m.FixerId, findings, fix);
                     var body = PrBody(m, g, findings, fix);
                     pr = await S.Tools.RunAsync("orchestrator", "github.create_pr", $"base={R.Pr.HeadRef} · head={branch}", Feed, e,
-                        () => GitHubPrs.CreateAsync(R.Pr.Repo, R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false), Ct), Ct);
+                        () => Scm.CreatePullRequestAsync(R.Pr.Repo, new NewPullRequest(R.Pr.HeadRef, branch, title, S.Masker.Mask(body, false)), Ct), Ct);
                 }
                 finally { R.Deadline.ExitPush(); }
             }
@@ -409,8 +412,8 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
             return f.Status is Status.Suppressed ? "suppressed" : f.Status is Status.NeedsHuman or Status.SuppressPending or Status.AcceptPending ? "human" : "fix";
         }
         var key = Hashing.Sha256($"{f.Fingerprint}|{rp.Ref}|{prompt.Ref}");
-        var hints = SuppressionHints(f, rp);
-        f.Attributes["rule_hints"] = hints.Count > 0 ? string.Join("; ", hints.Select(h => h.Text)) : "no suppression rule matched";
+        var hints = TriagePolicy.SuppressionHints(f, rp);
+        f.Attributes["rule_hints"] = TriagePolicy.HintsText(hints);
         var e = Feed.Entry("triage", $"triaging {label}…");
         var snippet = await S.Tools.RunAsync("triage-agent", "code.snippet", SnippetDisplay(f), Feed, e, () => Task.FromResult(Snippet(f)), Ct);
         var cached = R.FreshTriage ? null : S.Store.DecisionByKey(key);
@@ -426,7 +429,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
             var comps = new List<ComponentInput>
             {
                 new("finding", $"finding:{f.FindingId}", LlmStep.FindingJson(f)),
-                new("rule_pack", $"rule-packs/{rp.Id}@{rp.Version}", RulePackText(f, rp)),
+                new("rule_pack", $"rule-packs/{rp.Id}@{rp.Version}", TriagePolicy.RulePackText(f, rp)),
                 new("code_snippet", f.CodeSnippetRef ?? $"file:{f.FilePath ?? f.ComponentName}", snippet),
                 new("tool_output", "suppression-rule-check", "Suppression rule check: " + f.Attributes["rule_hints"]),
                 new("run_summary", $"run:{RunId}", ContextBuilder.RunSummary("pr", $"PR #{R.Pr.Number} {R.Pr.Repo} (new vs base)", R.Findings.Values, R.Budget.Remaining)),
@@ -441,33 +444,14 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
             if (call.Injections.Count > 0) Injection(f, call.Injections);
         }
 
-        // ---------------- policy layer (deterministic; the model only proposes) ----------------
+        // ---------------- policy layer (deterministic; the model only proposes): Policy/TriagePolicy.cs ----------------
         var notes = new List<string>();
         if (cached == null)
         {
-            if (f.IssueType == IssueTypes.Secret && S.Cfg.Policies.Authority.NeverLowerSecretSeverity && Schema.Rank(sev) < Schema.Rank(f.SeverityScanner))
-            { notes.Add($"secret severity not lowered below scanner severity ({sev} → {f.SeverityScanner})"); sev = f.SeverityScanner; }
-            var thresholds = S.Cfg.Policies.Thresholds;
-            // AppSec-approved rules are written against the scanner's normalised severity; a model-raised severity does not un-match them.
-            var ruleSev = f.SeverityScanner;
-            var ruleOk = hints.Count > 0 && Schema.Rank(ruleSev) <= Schema.Rank(hints.Min(h => h.MaxSeverity) ?? "info") && S.Cfg.Policies.Authority.AgentMaySuppress.Contains(ruleSev);
-            if (ruleOk && proposed != "suppress" && Schema.Rank(sev) > Schema.Rank(ruleSev))
-            { notes.Add($"model raised severity {ruleSev} → {sev} without rule evidence; rule evaluated at scanner severity"); sev = ruleSev; }
-            decision = proposed switch
-            {
-                not "suppress" when ruleOk => Note(notes, "suppress", $"AppSec-approved suppression rule matched with evidence (model proposed '{proposed}') → suppressed by rule pack {rp.Ref}"),
-                "fix" => "fix",
-                "suppress" when hints.Count == 0 => Note(notes, "needs_human", "agent proposed suppress but no suppression rule matched (no evidence) → human"),
-                "suppress" when Schema.Rank(sev) > Schema.Rank(hints.Min(h => h.MaxSeverity) ?? "info") || !S.Cfg.Policies.Authority.AgentMaySuppress.Contains(sev)
-                    => Note(notes, "suppress_pending", $"suppress of a {sev} finding needs AppSec sign-off"),
-                "suppress" => "suppress",
-                "accept" => Note(notes, "accept_pending", "risk acceptance needs a named human approver"),
-                _ => Note(notes, "needs_human", "model escalated"),
-            };
-            if (conf < thresholds.ConfidenceMin && decision is "fix" or "suppress")
-                decision = Note(notes, "needs_human", $"confidence {conf:0.00} < {thresholds.ConfidenceMin:0.00}");
+            var verdict = TriagePolicy.Apply(f, rp, proposed, sev, conf, hints, S.Cfg.Policies);
+            decision = verdict.Decision; sev = verdict.SeverityEffective; notes.AddRange(verdict.Notes);
         }
-        var bucket = decision switch { "suppress" => Buckets.Suppress, "accept_pending" => Buckets.AcceptDefer, _ => rp.BucketFor(sev) };
+        var bucket = TriagePolicy.BucketFor(decision, sev, rp);
         f.SeverityEffective = sev; f.Bucket = bucket;
         S.Store.SetTriageFields(f.FindingId, sev, bucket);
         var d = new TriageDecision
@@ -480,11 +464,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
         };
         S.Store.InsertDecision(d);
         Move(f, Status.Triaged, "triage", "triage-agent");
-        var to = decision switch
-        {
-            "suppress" => Status.Suppressed, "suppress_pending" => Status.SuppressPending, "accept_pending" => Status.AcceptPending,
-            "needs_human" => Status.NeedsHuman, _ => (string?)null,
-        };
+        var to = TriagePolicy.StatusFor(decision);
         if (to != null) Move(f, to, "triage_policy", "policy");
 
         var sevFlag = SevFlag[Schema.Rank(sev)];
@@ -504,7 +484,6 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
         return decision == "fix" ? "fix" : decision == "suppress" ? "suppressed" : "human";
     }
 
-    static string Note(List<string> notes, string decision, string note) { notes.Add(note); return decision; }
     static string Str(JsonElement e, string p) => e.TryGetProperty(p, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
 
     void Injection(Finding f, List<InjectionDetector.Hit> hits)
@@ -522,37 +501,6 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
         PublishGuards();
     }
 
-    sealed record Hint(string RuleId, string Text, string? MaxSeverity);
-
-    static List<Hint> SuppressionHints(Finding f, RulePack rp)
-    {
-        var list = new List<Hint>();
-        foreach (var rule in rp.SuppressionRules)
-        {
-            var pathOk = rule.PathGlob.Count == 0 || (f.FilePath != null && rule.PathGlob.Any(g => Glob(g, f.FilePath)));
-            var attrOk = rule.Attribute.Count == 0 || (rule.Attribute.TryGetValue("key", out var k) && rule.Attribute.TryGetValue("equals", out var v) && f.Attributes.GetValueOrDefault(k) == v);
-            if (pathOk && attrOk)
-                list.Add(new(rule.Id, $"rule '{rule.Id}' matched ({rule.Description}) path={f.FilePath}" + (rule.Attribute.Count > 0 ? $" {rule.Attribute["key"]}={rule.Attribute["equals"]}" : ""), rule.MaxSeverity));
-        }
-        return list;
-    }
-
-    static bool Glob(string glob, string path)
-    {
-        var rx = "^" + System.Text.RegularExpressions.Regex.Escape(glob).Replace(@"\*\*/", "(.*/)?").Replace(@"\*\*", ".*").Replace(@"\*", "[^/]*") + "$";
-        return System.Text.RegularExpressions.Regex.IsMatch(path, rx);
-    }
-
-    static string RulePackText(Finding f, RulePack rp)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine($"Rule pack {rp.Ref} for issue type {f.IssueType}.");
-        sb.AppendLine(rp.Guidance.Trim());
-        foreach (var r in rp.SuppressionRules) sb.AppendLine($"Suppression rule {r.Id}: {r.Description} (paths {string.Join(", ", r.PathGlob)}; max severity {r.MaxSeverity}).");
-        foreach (var (b, sevs) in rp.BucketRules) sb.AppendLine($"Bucket {b}: {string.Join("/", sevs)}.");
-        return sb.ToString();
-    }
-
     string SnippetDisplay(Finding f) => f.IssueType switch
     {
         IssueTypes.UnsafeCode => $"{f.FilePath}#{f.Attributes.GetValueOrDefault("enclosing_symbol")} (lines {f.Attributes.GetValueOrDefault("function_start")}-{f.Attributes.GetValueOrDefault("function_end")})",
@@ -562,52 +510,7 @@ public sealed class TriageExecutor(AgentServices s, RunState r) : StepBase("tria
         _ => $"{f.FilePath} metadata",
     };
 
-    string Snippet(Finding f)
-    {
-        string Numbered(string rel, int from, int to)
-        {
-            var path = Path.Combine(R.HeadDir, rel);
-            if (!File.Exists(path)) return "";
-            var lines = File.ReadAllLines(path);
-            from = Math.Max(1, from); to = Math.Min(lines.Length, to);
-            return string.Join('\n', Enumerable.Range(from, Math.Max(0, to - from + 1)).Select(n => $"{n,4}: {lines[n - 1]}"));
-        }
-        switch (f.IssueType)
-        {
-            case IssueTypes.UnsafeCode:
-                int.TryParse(f.Attributes.GetValueOrDefault("function_start"), out var a); int.TryParse(f.Attributes.GetValueOrDefault("function_end"), out var b);
-                return $"// {f.FilePath}\n" + Numbered(f.FilePath!, a > 0 ? a : (f.LineStart ?? 1) - 6, b > 0 ? b : (f.LineStart ?? 1) + 6);
-            case IssueTypes.Secret:
-                return $"// {f.FilePath}\n" + S.Masker.Mask(Numbered(f.FilePath!, (f.LineStart ?? 1) - 2, (f.LineStart ?? 1) + 2), false);
-            case IssueTypes.VulnerableDependency:
-            {
-                var pkg = f.Attributes.GetValueOrDefault("package") ?? "";
-                var sb = new StringBuilder();
-                foreach (var proj in Directory.GetFiles(R.HeadDir, "*.csproj", SearchOption.AllDirectories))
-                    foreach (var l in File.ReadAllLines(proj).Where(l => l.Contains($"\"{pkg}\"")))
-                        sb.AppendLine($"{Path.GetRelativePath(R.HeadDir, proj)}: {l.Trim()}");
-                sb.AppendLine($"lock file: {f.FilePath} · {f.DirectOrTransitive} dependency · fixed in {f.FixedVersion}");
-                return sb.ToString();
-            }
-            case IssueTypes.Licence:
-            {
-                var dir = Path.Combine(R.HeadDir, f.ComponentName!.Replace("file:", ""));
-                var sb = new StringBuilder();
-                if (Directory.Exists(dir))
-                    foreach (var file in Directory.GetFiles(dir).Order())
-                        sb.AppendLine(Numbered(Path.GetRelativePath(R.HeadDir, file), 1, 8));
-                var users = Directory.GetFiles(R.HeadDir, "*.cs", SearchOption.AllDirectories).Where(p => !p.StartsWith(dir) && !p.Replace('\\', '/').Contains("/obj/") && File.ReadAllText(p).Contains("CsvEscaper"))
-                    .Select(p => Path.GetRelativePath(R.HeadDir, p)).ToList();
-                sb.AppendLine("used by: " + (users.Count > 0 ? string.Join(", ", users) : "none"));
-                return sb.ToString();
-            }
-            default:
-            {
-                var refs = Directory.GetFiles(R.HeadDir, "*.csproj", SearchOption.AllDirectories).Where(p => File.ReadAllText(p).Contains(Path.GetFileName(f.FilePath!))).ToList();
-                return $"file {f.FilePath} · {f.Attributes.GetValueOrDefault("size")} bytes · sha256 {f.Attributes.GetValueOrDefault("sha256")?[..16]}… · referenced by project files: {(refs.Count > 0 ? string.Join(", ", refs) : "none")}";
-            }
-        }
-    }
+    string Snippet(Finding f) => TriageSnippets.Build(f, R.HeadDir, S.Masker);
 }
 
 // ============================================================ Router ============================================================
@@ -700,7 +603,7 @@ public sealed class RouterExecutor(AgentServices s, RunState r) : StepBase("rout
     async Task<PrReuse.Decision> RevalidateAsync(SqlStore.LedgerEntry ledger)
     {
         if (FixKeys.PrNumber(ledger.ResultRef) is not int n || !FixKeys.PrUrlInRepo(ledger.ResultRef, R.Pr.Repo)) return new(false, "ledger entry has no PR in this repository");
-        var pr = await S.Tools.RunAsync("router", "github.get_pr", $"#{n} revalidate (state, base)", null, null, () => GitHubPrs.GetAsync(R.Pr.Repo, n, Ct), Ct);
+        var pr = await S.Tools.RunAsync("router", "github.get_pr", $"#{n} revalidate (state, base)", null, null, () => GetSummaryAsync(n), Ct);
         return PrReuse.Decide(pr, R.Pr.Repo, R.Pr.HeadRef);
     }
 }

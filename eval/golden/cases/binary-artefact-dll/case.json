@@ -1,0 +1,50 @@
+{
+  "id": "binary-artefact-dll",
+  "title": "Compiled DLL committed to the repository",
+  "category": "binary_artefact",
+  "description": "A prebuilt DLL in lib/ that nothing references. Expected: remove it and add an ignore rule so binaries come from the artefact feed; the project still builds.",
+  "tags": [
+    "positive",
+    "binary"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "binary_licence",
+    "outcome": "fixed",
+    "severity_effective": "medium"
+  },
+  "checks": [
+    {
+      "type": "file_absent",
+      "file": "lib/Legacy.Pdf.dll"
+    },
+    {
+      "type": "pattern_present",
+      "file": ".gitignore",
+      "regex": "^lib/\\*\\.dll$"
+    },
+    {
+      "type": "builds"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "lib/Legacy.Pdf.dll",
+        ".gitignore"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "committed-binary",
+    "file": "lib/Legacy.Pdf.dll"
+  },
+  "generated_files": [
+    {
+      "path": "lib/Legacy.Pdf.dll",
+      "kind": "pe_stub"
+    }
+  ]
+}

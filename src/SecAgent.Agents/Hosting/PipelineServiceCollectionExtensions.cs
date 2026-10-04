@@ -32,12 +32,17 @@ public sealed class PipelineRunAdmission(AgentServices svc) : IRunAdmission
 public static class PipelineServiceCollectionExtensions
 {
     /// <summary>Pipeline services + pipeline-side adapters for the intake ports. Call before AddSecAgentIntake so the intake shares the
-    /// pipeline's SecretMasker and schema validator (its TryAdd registrations then keep these).</summary>
+    /// pipeline's SecretMasker and schema validator (its TryAdd registrations then keep these). The connector ports
+    /// (<see cref="PipelineConnectors"/>) come from the host's connector composition (SecAgent.Connectors.Hosting).</summary>
+    /// <param name="cfg">Rules snapshot (<see cref="AgentServices.LoadConfig"/>), shared with the connector composition.</param>
     /// <param name="shareQueue">True (dashboard): the intake uses the pipeline's in-process queue. False (worker host): the host has
     /// already registered a transport-specific <see cref="IMessageQueue"/> (for example the shared file queue) and keeps it.</param>
-    public static IServiceCollection AddSecAgentPipeline(this IServiceCollection services, string repoRoot, string dataRoot, string sql, bool shareQueue = true)
+    public static IServiceCollection AddSecAgentPipeline(this IServiceCollection services, ConfigSnapshot cfg, string repoRoot, string dataRoot, string sql,
+        bool shareQueue = true)
     {
-        services.AddSingleton(sp => AgentServices.Create(repoRoot, dataRoot, sql, sp.GetRequiredService<IExternalFindingSource>()));
+        services.AddSingleton(cfg);
+        services.AddSingleton(sp => AgentServices.Create(repoRoot, dataRoot, sql, sp.GetRequiredService<PipelineConnectors>(),
+            sp.GetService<IExternalFindingSource>(), cfg));
         services.AddSingleton<RunService>();
         services.AddSingleton(sp => sp.GetRequiredService<AgentServices>().Masker);
         if (shareQueue) services.AddSingleton<IMessageQueue>(sp => sp.GetRequiredService<AgentServices>().Queue);

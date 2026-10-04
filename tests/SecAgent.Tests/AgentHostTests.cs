@@ -245,6 +245,21 @@ public class AgentRoleRegistrationTests
     }
 
     [Fact]
+    public void Orchestrator_wires_connector_ports_from_the_shipped_worker_settings()
+    {
+        var cfg = WorkerKit.Config("orchestrator", WorkerKit.TempDir());
+        var shipped = new ConfigurationBuilder().AddJsonFile(Path.Combine(TestEnv.RepoRoot, "src", "SecAgent.Worker", "appsettings.json")).Build();
+        foreach (var (k, v) in shipped.AsEnumerable().Where(kv => kv.Key.StartsWith("Connectors"))) cfg[k] = v;
+        var (sp, _) = WorkerKit.Compose(cfg);
+        using var __ = sp;
+        // Resolving the connector ports needs no SQL (the pipeline itself is not built here).
+        var ports = sp.GetRequiredService<SecAgent.Agents.PipelineConnectors>();
+        var tenant = ports.Tenants.ForRepository("zulq2019/sec-agent-sample-app");
+        Assert.Equal("local", tenant);
+        Assert.Equal("github", sp.GetRequiredService<SecAgent.Connectors.ITenantConnectionResolver>().Resolve(tenant, SecAgent.Connectors.ConnectorKind.SourceControl)!.Provider);
+    }
+
+    [Fact]
     public void Orchestrator_without_sql_fails_at_composition()
     {
         var cfg = WorkerKit.Config("orchestrator", WorkerKit.TempDir());

@@ -3,8 +3,21 @@
     <AssemblyName>secagent</AssemblyName>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="SecAgent.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
     <ProjectReference Include="../SecAgent.Intake/SecAgent.Intake.csproj" />
+    <!-- Connector plug-ins: only the composition root knows the implementations; which one serves a tenant is configuration. -->
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Hosting/SecAgent.Connectors.Hosting.csproj" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.19.1" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.19.1" />
     <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.19.1" />

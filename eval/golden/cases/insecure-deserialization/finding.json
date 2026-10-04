@@ -1,0 +1,37 @@
+{
+  "finding_id": "3acc0137-7d10-4a3b-912d-b759ee88a495",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.newtonsoft.typenamehandling",
+  "issue_type": "unsafe_code",
+  "title": "Insecure deserialization in Load()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-502"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Messaging/OrderMessageReader.cs",
+  "line_start": 15,
+  "line_end": 15,
+  "message": "Insecure deserialization in Load()",
+  "attributes": {
+    "enclosing_symbol": "Load",
+    "function_start": "13",
+    "function_end": "17"
+  },
+  "fingerprint": "762e03e8d7671778eed9779aad043828b38fbfb2354b3e0ae56b689cad22c95a",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/insecure-deserialization/raw.json",
+  "sarif_ref": "blob://eval/insecure-deserialization/scan.sarif",
+  "created_by_run": "41a5e026-f511-459c-9f29-381721beee31"
+}

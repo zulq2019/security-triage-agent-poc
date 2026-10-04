@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Jira issue tracker connector (REST API v3 for Jira Cloud, v2 for Data Center). Built from Atlassian's public REST documentation;
+       request shapes not verified against a live site are marked ASSUMPTION. Tests use an HttpMessageHandler stub, never a real Jira. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+  </ItemGroup>
+</Project>

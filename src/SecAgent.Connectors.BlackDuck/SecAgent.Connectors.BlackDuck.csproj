@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Black Duck scanner-source connector (read-only REST pull for backlog mode + upgrade guidance). Built from the public Black Duck REST
+       documentation; response fields not verified against a live server are marked ASSUMPTION. Tests use an HttpMessageHandler stub. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+  </ItemGroup>
+</Project>

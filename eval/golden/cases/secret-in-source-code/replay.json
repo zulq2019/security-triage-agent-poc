@@ -1,0 +1,16 @@
+{
+  "case_id": "secret-in-source-code",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "bc30616b9405baa3ab4e4eccad432f14e7a4f1cd92fd36850be24318f123be12",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "medium",
+        "reason": "Hard-coded cloud key in source. It looks like a development key, so medium; still must be removed and rotated.",
+        "confidence": 0.8
+      }
+    }
+  }
+}

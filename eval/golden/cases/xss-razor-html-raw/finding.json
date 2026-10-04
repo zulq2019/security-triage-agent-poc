@@ -1,0 +1,32 @@
+{
+  "finding_id": "835b3c3c-aa7e-4b34-a184-74445c82fac7",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.razor.html-raw",
+  "issue_type": "unsafe_code",
+  "title": "Unencoded output (Html.Raw) in Show.cshtml",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-79"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Views/Profile/Show.cshtml",
+  "line_start": 7,
+  "line_end": 7,
+  "message": "Html.Raw writes user-controlled data without HTML encoding",
+  "fingerprint": "97fb221179353968db0c731cc6f9ef9e1a3be6b5bc228e781a42fc3bf8c7f918",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/xss-razor-html-raw/raw.json",
+  "sarif_ref": "blob://eval/xss-razor-html-raw/scan.sarif",
+  "created_by_run": "55e833f2-b00c-4180-932d-11264e8ed4c4"
+}

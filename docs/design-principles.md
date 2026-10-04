@@ -73,6 +73,48 @@ What stays static, and why: `ExternalFindingPolicy`, `FindingNormalisation`, `Pa
 are pure functions or constants with no state or I/O, so there is nothing to inject or swap. The existing pipeline (`AgentServices.Create`,
 `RunService.AnyActive`, `Hashing.Hmac`) was left as it was. The intake reaches it only through the ports above.
 
+## Connectors (GitHub, Jira, Black Duck, model provider, Teams)
+
+The connector layer (`src/SecAgent.Connectors*`, see [connectors.md](connectors.md)) follows the same rules: constructor injection, one
+composition (`AddSecAgentConnectorPlugins` in `SecAgent.Connectors.Hosting`, used by the dashboard and the worker's orchestrator role), the options pattern with a validator, and dependencies pointing
+inwards. `SecAgent.Connectors.Abstractions` depends on nothing; the runtime and every plug-in depend only on it (and the runtime); the
+pipeline depends only on the abstractions. Architecture tests enforce the references.
+
+| Pattern / principle | Where |
+|---|---|
+| **Ports & adapters** | Client interfaces in `SecAgent.Connectors.Abstractions`; adapters in one project per system (`.GitHub`, `.Jira`, `.BlackDuck`, `.OpenAI`, `.Teams`) plus `.Fakes`. |
+| **Interface segregation** | Each client is a union of small interfaces (`IPullRequestReader`, `IPullRequestWriter`, `IBranchPublisher`, `IIssueTransitioner`, `IVulnerabilityBacklogReader`, `IModelCompletion`, ...). |
+| **No merge by construction** | No merge/approve/protection member on any interface (reflection test); `NoMergeGuardHandler` blocks those GitHub endpoints at the HTTP layer as well. |
+| **Plug-in registry / capability descriptors** | `IConnector.Describe()` returns a `ConnectorDescriptor` (capabilities, scopes and reasons, never-granted list, setup fields); `ConnectorCatalog` lists them for the Connections page (`GET /api/connectors`). |
+| **Abstract factory by configuration** | `IConnectorClientFactory<TClient>.ForTenant(tenant)` picks the plug-in named in `Connectors:Tenants:<t>:<Kind>:Provider` and calls its `CreateClient`. |
+| **Per-tenant resolution** | `ITenantResolver` (repository → tenant) and `ITenantConnectionResolver` (tenant + kind → connection). Multi-tenant never falls back to another tenant. |
+| **Options + validation** | `ConnectorOptions` bound from `Connectors`, `ConnectorOptionsValidator` + `ValidateOnStart` (unknown provider, missing field, secret-looking setting, overlapping repositories, process-wide secrets in multi-tenant mode). |
+| **Decorator / interceptor chain** | Every client is wrapped by a per-kind decorator that runs `IConnectorCallInterceptor`s: `AuditingInterceptor` (audit events, no payloads) then `ResilienceInterceptor` (Polly retry for idempotent calls only, per-tenant circuit breaker, timeouts). |
+| **HTTP resilience** | `AddConnectorHttpClient` adds the `Microsoft.Extensions.Http.Resilience` handler (timeout, token-bucket rate limiter, retry on safe methods only, circuit breaker). |
+| **Template Method** | `ConnectorRestClient` base: base URL, auth hook, JSON, error mapping, same-host link following; Jira and Black Duck clients override the auth hook. |
+| **Injected secret provider** | `ISecretProvider` over `ISecretSource`s (`env:`, `kv:` Key Vault, `gh-cli:` local, `memory:` tests). Configuration holds references only. |
+| **Null / optional connectors** | `TryForTenant` for issue tracker, notifier and scanner source; a missing or failing optional connector never fails a run. |
+| **Fakes + contract tests** | `.Fakes` with a shared `FakeConnectorWorld` that records interactions; abstract contract test classes run against the fake and the real plug-in (behind HTTP simulators). |
+
+## Evaluation harness (golden set)
+
+`src/SecAgent.Eval` (see [evaluation.md](evaluation.md)) follows the same rules as the intake. It uses constructor injection only, has a
+single composition root (`services.AddSecAgentEval(options)`), validates its options on first use, injects `TimeProvider`, and keeps no
+mutable static state. Reflection tests enforce the static-state rule, the absence of merge/approve methods, and that services depend on
+harness interfaces rather than classes.
+
+| Pattern / principle | Where |
+|---|---|
+| **Strategy** | `IOutcomeChecker` (one class per check type, looked up by `ICheckerRegistry`), `IEvalFixer` (one per routed fixer id, chosen by `IFixRouter` from `routing.yaml`), `IEvalModelClient` (replay / live / record / stamp), `IGateRule`, `IReportWriter`. Each is added with `AddOutcomeChecker<T>()`, `AddEvalFixer<T>()`, `AddGateRule<T>()` or `AddReportWriter<T>()`. |
+| **Keyed services by configuration** | Model clients are keyed by mode. `IEvalModelClient` resolves the key named in `EvalOptions.Mode`. |
+| **Decorator** | `RecordingModelClient` wraps the live client and saves its answers. `StampingModelClient` wraps the replay client and writes prompt hashes. |
+| **Ports & adapters** | `ICaseSource`, `ICaseWorkspaceFactory`, `IGitDiff`, `IProcessRunner`, `IBuildRunner`, `IFindingScanner`, `ICassetteStore`, `IBaselineStore`, `IPackageVersionResolver` and `ISyntheticSecretGenerator`, each with a file-system or process adapter. The regex scanner can be swapped for a gitleaks/Semgrep/Trivy adapter. |
+| **Template method** | `ExpectedValueChecker` (triage decision, fixer, outcome, severity) and `PatternChecker` (absent / present). |
+| **Memoised evidence** | `ICaseEvidence` builds, rescans and diffs each workspace at most once, shared by the verifier and all checkers. |
+| **Options + validation** | `EvalOptions` and `EvalOptionsValidator` reject an unknown mode, missing folders, a parallelism below 1, or a work root inside the repository. |
+| **Pure shared policy** | `TriagePolicy`, `TriageSnippets`, `FixEdits` (in `SecAgent.Agents`) and `ContextAssembler` were extracted from `TriageExecutor`, the fixers and `ContextBuilder`. The pipeline and the harness run the same decision and edit code. |
+| **Fakes in tests** | `FakeEvidence` and `FakeBuildRunner` replace `dotnet` in checker and end-to-end tests. Recordings are copied to temp folders and edited to simulate misses, unsafe proposals and regressions. |
+
 ## Worker host (one container per agent)
 
 The agent containers (`src/SecAgent.Hosting`, `src/SecAgent.Worker`, see [containers.md](containers.md)) apply the same rules:

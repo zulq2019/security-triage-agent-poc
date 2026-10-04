@@ -1,0 +1,44 @@
+{
+  "id": "ssrf-user-url",
+  "title": "SSRF: server fetches a caller-supplied URL",
+  "category": "ssrf",
+  "description": "FetchAsync downloads whatever URL the caller supplies (internal hosts, cloud metadata). Expected: only https URLs on the avatar host are fetched; anything else is refused before any request is made.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Profiles/AvatarFetcher.cs",
+      "regex": "\\.Host\\b"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Profiles/AvatarFetcher.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "http-fetch-of-caller-url",
+    "file": "src/App/Profiles/AvatarFetcher.cs"
+  }
+}

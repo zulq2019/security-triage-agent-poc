@@ -22,8 +22,11 @@ public static class FixKeys
 
     public static string PrLedger(string groupKey) => $"fix:{groupKey}:pr";
 
+    /// <summary>True when the URL is a PR of <paramref name="repo"/> on any source control host (github.com, GitHub Enterprise Server,
+    /// the in-memory fake): https://&lt;host&gt;/&lt;repo&gt;/pull/&lt;n&gt;.</summary>
     public static bool PrUrlInRepo(string? url, string repo) =>
-        url != null && url.StartsWith($"https://github.com/{repo}/pull/", StringComparison.OrdinalIgnoreCase);
+        Uri.TryCreate(url, UriKind.Absolute, out var u) && u.Scheme == Uri.UriSchemeHttps
+        && u.AbsolutePath.StartsWith($"/{repo}/pull/", StringComparison.OrdinalIgnoreCase);
 
     public static int? PrNumber(string? url) => int.TryParse(url?.TrimEnd('/').Split('/').Last(), out var n) ? n : null;
 

@@ -32,6 +32,16 @@ COPY src/SecAgent.Abstractions/SecAgent.Abstractions.csproj src/SecAgent.Abstrac
 COPY src/SecAgent.Agents/SecAgent.Agents.csproj src/SecAgent.Agents/
 COPY src/SecAgent.Intake/SecAgent.Intake.csproj src/SecAgent.Intake/
 COPY src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj src/SecAgent.Intake.Azure/
+COPY src/SecAgent.Connectors.Abstractions/SecAgent.Connectors.Abstractions.csproj src/SecAgent.Connectors.Abstractions/
+COPY src/SecAgent.Connectors/SecAgent.Connectors.csproj src/SecAgent.Connectors/
+COPY src/SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj src/SecAgent.Connectors.GitHub/
+COPY src/SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj src/SecAgent.Connectors.Jira/
+COPY src/SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj src/SecAgent.Connectors.BlackDuck/
+COPY src/SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj src/SecAgent.Connectors.OpenAI/
+COPY src/SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj src/SecAgent.Connectors.Teams/
+COPY src/SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj src/SecAgent.Connectors.KeyVault/
+COPY src/SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj src/SecAgent.Connectors.Fakes/
+COPY src/SecAgent.Connectors.Hosting/SecAgent.Connectors.Hosting.csproj src/SecAgent.Connectors.Hosting/
 COPY src/SecAgent.Hosting/SecAgent.Hosting.csproj src/SecAgent.Hosting/
 COPY src/SecAgent.Hosting.Azure/SecAgent.Hosting.Azure.csproj src/SecAgent.Hosting.Azure/
 COPY src/SecAgent.Worker/SecAgent.Worker.csproj src/SecAgent.Worker/

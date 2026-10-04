@@ -240,7 +240,7 @@ consumed queue or subscription). This repo does not duplicate them. Instead, `de
 | **Options pattern** | `AgentHostOptions` (`Agent` section), `ScannerRoleOptions`, `ServiceBusTransportOptions`. The env aliases match the Bicep names. |
 | **Hosted service + graceful drain** | `AgentQueueConsumer` drains on SIGTERM, with a separate processing token and a bounded drain time. |
 | **Fail fast** | Catalogue validation, unknown role or transport, a missing SQL connection for roles that need one, and handlers bound to queues the agent does not own: each stops the host on start with one line. |
-| **Shared composition** | The pipeline wiring moved from the dashboard to `SecAgent.Agents/Hosting/AddSecAgentPipeline`, so `secagent serve` and the orchestrator container build it the same way. |
+| **Shared composition** | The pipeline wiring moved from the dashboard to `SecAgent.Agents/Hosting/AddSecAgentPipeline`, and the connector plug-ins to `SecAgent.Connectors.Hosting` (`AddSecAgentPipelineWithConnectors`), so `secagent serve` and the orchestrator container build them the same way. |
 
 ## Verified on the box (2026-10-03)
 

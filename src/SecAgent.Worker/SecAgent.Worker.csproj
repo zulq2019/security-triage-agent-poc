@@ -9,6 +9,7 @@
     <ProjectReference Include="../SecAgent.Hosting/SecAgent.Hosting.csproj" />
     <ProjectReference Include="../SecAgent.Hosting.Azure/SecAgent.Hosting.Azure.csproj" />
     <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
+    <ProjectReference Include="../SecAgent.Connectors.Hosting/SecAgent.Connectors.Hosting.csproj" />
     <ProjectReference Include="../SecAgent.Intake/SecAgent.Intake.csproj" />
     <ProjectReference Include="../SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
   </ItemGroup>

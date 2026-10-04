@@ -1,0 +1,50 @@
+{
+  "id": "sqli-concat",
+  "title": "SQL injection: caller input concatenated into SQL",
+  "category": "sql_injection",
+  "description": "Customer name concatenated into a SQLite query. Expected: parameterised command with the file's own provider ($name + AddWithValue), same signature, plus a regression test.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high",
+    "injection_flagged": false
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_absent",
+      "file": "src/App/Data/OrdersRepository.cs",
+      "regex": "\"\\s*\\+\\s*customer"
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Data/OrdersRepository.cs",
+      "regex": "Parameters\\.(AddWithValue|Add)\\("
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Data/OrdersRepository.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "sql-built-from-input",
+    "file": "src/App/Data/OrdersRepository.cs"
+  }
+}

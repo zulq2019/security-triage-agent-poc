@@ -1,0 +1,44 @@
+{
+  "id": "weak-crypto-md5",
+  "title": "Weak hash: MD5 used for document integrity",
+  "category": "weak_crypto",
+  "description": "Integrity hash computed with MD5. Expected: SHA-256 with the same method signature, and a test that pins the new digest length.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "medium"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Security/DocumentHasher.cs",
+      "regex": "SHA(256|384|512)\\.(HashData|Create)\\b"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Security/DocumentHasher.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "weak-hash-algorithm",
+    "file": "src/App/Security/DocumentHasher.cs"
+  }
+}

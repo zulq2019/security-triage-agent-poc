@@ -64,7 +64,10 @@ public sealed class RunService(AgentServices s)
     public async Task<Handle> StartAsync(string repo, int prNumber, bool fresh, bool blockForReview, string? expectedHeadSha = null)
     {
         s.Kill.ThrowIfOn("start run");
-        var pr = await GitWorkspace.GetPrAsync(repo, prNumber, CancellationToken.None);
+        var tenant = s.Connectors.Tenants.ForRepository(repo);
+        var info = await s.Connectors.SourceControl.ForTenant(tenant).GetPullRequestAsync(repo, prNumber, CancellationToken.None)
+                   ?? throw new InvalidOperationException($"PR {repo}#{prNumber} was not found");
+        var pr = GitWorkspace.ToPrInfo(info);
         if (expectedHeadSha != null && !string.Equals(pr.HeadSha, expectedHeadSha, StringComparison.OrdinalIgnoreCase))
             throw new PrHeadMovedException(repo, prNumber, expectedHeadSha, pr.HeadSha);
         var budgetCfg = s.Cfg.Policies.Budgets["pr"];
@@ -76,7 +79,7 @@ public sealed class RunService(AgentServices s)
         };
         s.Store.InsertRun(run);
         var limits = RunLimits.From(budgetCfg);
-        var state = new RunState { Run = run, Pr = pr, Feed = new Feed(s.Bus, run.RunId), Budget = new RunBudget(limits.Tokens, limits.Cost), FreshTriage = fresh, Limits = limits };
+        var state = new RunState { Run = run, Pr = pr, TenantId = tenant, Feed = new Feed(s.Bus, run.RunId), Budget = new RunBudget(limits.Tokens, limits.Cost), FreshTriage = fresh, Limits = limits };
         state.Deadline = new RunDeadline(limits.TimeLimit, () => { OnTimeBudgetSpent(state); return Task.CompletedTask; });
         RunRegistry.Add(state);
         var h = new Handle { State = state };
@@ -134,6 +137,7 @@ public sealed class RunService(AgentServices s)
                     case RequestInfoEvent req:
                         h.PendingReview = req.Request;
                         Finish(st, "awaiting_human_review", sw.Elapsed, checkpoints);
+                        await new RunOutbound(s).PublishOnceAsync(st, CancellationToken.None);
                         if (!blockForReview) goto done;
                         break;
                     case SuperStepCompletedEvent ss when ss.CompletionInfo?.Checkpoint != null:
@@ -172,6 +176,7 @@ public sealed class RunService(AgentServices s)
             Finish(st, status, sw.Elapsed, checkpoints);
         }
         else if (st.Run.Status == "running") Finish(st, "completed", sw.Elapsed, checkpoints);
+        await new RunOutbound(s).PublishOnceAsync(st, CancellationToken.None);   // no-op when already sent at the review gate
         if (st.Run.Status != "awaiting_human_review") st.Deadline.Dispose();
     }
 

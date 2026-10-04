@@ -2,7 +2,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using SecAgent.Abstractions.Agents;
 using SecAgent.Agents;
-using SecAgent.Agents.Hosting;
+using SecAgent.Connectors.Hosting;
 using SecAgent.Core;
 using SecAgent.Hosting;
 using SecAgent.Intake;
@@ -28,7 +28,7 @@ public sealed class OrchestratorRole : IAgentRoleModule
             o.DispatcherEnabled = true;
         });
         // shareQueue: false — the transport module registered the IMessageQueue the intake container also uses (file queue / Service Bus).
-        services.AddSecAgentPipeline(context.ContentRoot, context.DataRoot, sql, shareQueue: false);
+        services.AddSecAgentPipelineWithConnectors(context.Configuration, context.ContentRoot, context.DataRoot, sql, shareQueue: false);
         services.AddSecAgentIntake(context.Configuration);
         services.AddSecAgentIntakeAzure(context.Configuration);
         services.AddAgentMessageHandler<WorkResultHandler>(context, "results");

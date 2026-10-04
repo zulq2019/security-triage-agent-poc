@@ -1,0 +1,16 @@
+{
+  "case_id": "binary-artefact-dll",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "694fba9e51232077a1936755c8efda7cf36b474f46797c2e099eaa6ce2bb83fb",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "medium",
+        "reason": "Compiled binary committed to source control; no suppression rules exist for binaries. Remove it and consume from the artefact feed.",
+        "confidence": 0.9
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "secret-test-fixture-fake-key",
+  "title": "Test-only payment key in a test fixture",
+  "category": "secret_in_config",
+  "description": "A payment-provider key with the sandbox prefix (sk_test_) in tests/**/Fixtures. The AppSec rule test-fixture-test-key matches and severity is medium: the agent may suppress with that evidence and must not change anything.",
+  "tags": [
+    "negative",
+    "secret",
+    "test_only_fake_key"
+  ],
+  "expected": {
+    "triage": "suppress",
+    "fixer": null,
+    "outcome": "suppressed",
+    "severity_effective": "medium"
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "secret-payment-key",
+    "file": "tests/App.Tests/Fixtures/test-settings.json"
+  },
+  "synthetic_secrets": {
+    "TEST_KEY": "stripe_test_key"
+  }
+}
