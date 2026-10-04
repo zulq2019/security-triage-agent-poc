@@ -43,6 +43,12 @@ public sealed class IntakeRecord
     public string Key { get; set; } = "";
     public string BodySha256 { get; set; } = "";
     public string Status { get; set; } = IntakeStatus.Claimed;
+    /// <summary>Identifies the delivery attempt that holds the claim (optimistic concurrency for taking over a failed or stale claim).</summary>
+    public string ClaimToken { get; set; } = "";
+    /// <summary>How many times a later delivery took the claim over (failed or lease expired). Capped by Intake:MaxClaimTakeovers.</summary>
+    public int Takeovers { get; set; }
+    /// <summary>Set with <see cref="IntakeStatus.Failed"/> when the takeover ceiling was reached: failed for good, never taken over again.</summary>
+    public bool Terminal { get; set; }
     public IntakeMetadata? Meta { get; set; }
     public string? RawUri { get; set; }
     public string? RawHash { get; set; }
@@ -56,9 +62,17 @@ public sealed class IntakeRecord
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>Lifecycle of an intake record. <see cref="Claimed"/> = a delivery is processing it; <see cref="Failed"/> = that delivery failed
+/// before a run was requested (the key is free for a retry at once, until Intake:MaxClaimTakeovers takeovers have been used up: then
+/// the record stays failed for good). Every other status means the payload was accepted and a run was requested (<see cref="IsAccepted"/>);
+/// only those answer a retry with "duplicate".</summary>
 public static class IntakeStatus
 {
-    public const string Claimed = "claimed", Queued = "queued", RunStarted = "run_started", BacklogPending = "backlog_pending", StartFailed = "start_failed";
+    public const string Claimed = "claimed", Failed = "failed", Queued = "queued", RunStarted = "run_started", BacklogPending = "backlog_pending",
+        StartFailed = "start_failed", Superseded = "superseded";
+
+    /// <summary>True once the payload is stored and a run was requested (a retry of it is a duplicate, not new work).</summary>
+    public static bool IsAccepted(string status) => status is Queued or RunStarted or BacklogPending or StartFailed or Superseded;
 }
 
 /// <summary>What the intake asks the pipeline to do after a payload is accepted.</summary>

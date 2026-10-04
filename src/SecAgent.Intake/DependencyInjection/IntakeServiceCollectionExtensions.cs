@@ -49,6 +49,12 @@ public static class IntakeServiceCollectionExtensions
         // Security.
         services.TryAddSingleton<IIntakeSecretProvider, EnvironmentIntakeSecretProvider>();
         services.TryAddSingleton<IIntakeAuthenticator, HmacIntakeAuthenticator>();
+        // Reading intake records (GET /api/intake): admin token, HMAC-signed request, or (dev, opt-in) loopback. Strategy list + authoriser.
+        services.TryAddSingleton<IIntakeAdminTokenProvider, EnvironmentIntakeAdminTokenProvider>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IIntakeReadCredential, AdminTokenReadCredential>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IIntakeReadCredential, HmacSignedReadCredential>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IIntakeReadCredential, LoopbackReadCredential>());
+        services.TryAddSingleton<IIntakeReadAuthorizer, IntakeReadAuthorizer>();
 
         // Application: metadata → pipeline of steps (Chain of Responsibility) → webhook / blob entry points.
         services.TryAddSingleton<IIntakeMetadataReader, IntakeMetadataReader>();

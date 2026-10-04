@@ -185,6 +185,26 @@ public class IntakeDesignTests
         Assert.IsType<SecAgent.Intake.Runs.LocalIntakeRunQueue>(local.Services.GetRequiredService<IRunStarter>());
     }
 
+    // ---- Run queue convention (shared with infra/agents.bicep: queue "runs", sessions on) --------------------------------------
+
+    [Fact]
+    public void Run_queue_uses_the_bicep_queue_name_and_a_session_per_run_target()
+    {
+        Assert.Equal("runs", RunQueueConvention.QueueName);
+        Assert.Equal(RunQueueConvention.QueueName, SecAgent.Intake.Runs.LocalIntakeRunQueue.QueueName);
+        Assert.Equal(RunQueueConvention.QueueName, new AzureIntakeOptions().RunQueueName);
+        Assert.True(new AzureIntakeOptions().RunQueueRequiresSession);
+
+        var pr = new IntakeRunRequest("in-1", "key-0123456789abcdef", "synthetic-org/app", 12, null, "abc123", "blackduck", "rapid", 3);
+        var msg = ServiceBusIntakeRunQueue.ToMessage(pr);
+        Assert.Equal("key-0123456789abcdef", msg.MessageId);
+        Assert.Equal("synthetic-org/app#12", msg.SessionId);
+        Assert.Equal("synthetic-org/app@refs/heads/main", RunQueueConvention.SessionId(pr with { PrNumber = null, Ref = "refs/heads/main" }));
+        var longKey = RunQueueConvention.SessionId(pr with { Repo = new string('r', 200) });
+        Assert.True(longKey.Length <= RunQueueConvention.MaxSessionIdLength);
+        Assert.StartsWith("sha256:", longKey);
+    }
+
     // ---- Injected schema cache (no process-wide static) ----------------------------------------------------------------------
 
     [Fact]

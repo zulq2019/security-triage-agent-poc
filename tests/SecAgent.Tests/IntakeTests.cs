@@ -36,8 +36,21 @@ public sealed class FakeRunStarter : IRunStarter
 public sealed class FakePrRunLauncher : IPrRunLauncher
 {
     public List<(string Repo, int Pr)> Started { get; } = [];
+    public List<string?> ExpectedShas { get; } = [];
     public Guid RunId { get; } = Guid.NewGuid();
-    public Task<Guid> StartPrRunAsync(string repo, int prNumber, CancellationToken ct) { lock (Started) Started.Add((repo, prNumber)); return Task.FromResult(RunId); }
+    /// <summary>The PR head the fake "GitHub" reports; null = whatever the caller expects (head unchanged).</summary>
+    public string? CurrentHeadSha { get; set; }
+    public Task<PrRunStart> StartPrRunAsync(string repo, int prNumber, string? expectedHeadSha, CancellationToken ct)
+    {
+        lock (Started)
+        {
+            ExpectedShas.Add(expectedHeadSha);
+            var head = CurrentHeadSha ?? expectedHeadSha ?? IntakeKit.Sha;
+            if (expectedHeadSha != null && !string.Equals(head, expectedHeadSha, StringComparison.OrdinalIgnoreCase)) return Task.FromResult(PrRunStart.Superseded(head));
+            Started.Add((repo, prNumber));
+            return Task.FromResult(PrRunStart.Run(RunId, head));
+        }
+    }
 }
 
 public sealed class FakeRunAdmission : IRunAdmission
@@ -463,7 +476,9 @@ public class IntakeServiceTests
         var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid), body, "test", default))));
         Assert.Single(k.Runs.Requests);
         Assert.Equal(1, results.Count(r => r.StatusCode == 202));
-        Assert.All(results, r => Assert.Contains(r.StatusCode, new[] { 200, 202 }));
+        // the others see either the finished intake (200 duplicate) or the claim still in progress (503 + Retry-After, retried by the producer)
+        Assert.All(results, r => Assert.Contains(r.StatusCode, new[] { 200, 202, 503 }));
+        Assert.All(results.Where(r => r.StatusCode == 503), r => Assert.Equal("in_progress", Status(r)));
     }
 
     [Fact]
@@ -528,11 +543,73 @@ public class IntakeServiceTests
         k.Ledger.TryClaim(new IntakeRecord { Key = meta.IdempotencyKey, BodySha256 = Hashing.Sha256(body), Meta = meta, UpdatedAt = DateTime.UtcNow.AddMinutes(-10) }, out _);
         var inProgress = new IntakeRecord { Key = IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1").IdempotencyKey, BodySha256 = Hashing.Sha256(body) };
         k.Ledger.TryClaim(inProgress, out _);   // fresh claim held by a concurrent delivery
-        Assert.Equal(200, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1"), body, "test", default)).StatusCode);
+        // never "duplicate" for an unfinished claim: 503 in_progress with a Retry-After inside the lease
+        var busy = await k.Acceptor.AcceptAsync(IntakeKit.Meta(IntakeFormats.BlackDuckRapid, runId: "9-1"), body, "test", default);
+        Assert.Equal((503, "in_progress"), (busy.StatusCode, Status(busy)));
+        Assert.InRange(busy.RetryAfterSeconds!.Value, 1, k.Options.ClaimLeaseSeconds);
         var r = await k.Acceptor.AcceptAsync(meta, body, "test", default);
         Assert.Equal(202, r.StatusCode);
         Assert.Single(k.Runs.Requests);
         Assert.Equal(IntakeStatus.Queued, k.Ledger.Get(meta.IdempotencyKey)!.Status);
+    }
+
+    sealed class FlakyRunStarter(int failures) : IRunStarter
+    {
+        int _left = failures;
+        public readonly ConcurrentQueue<IntakeRunRequest> Requests = new();
+        public Task<RunTicket> EnqueueAsync(IntakeRunRequest request, CancellationToken ct)
+        {
+            if (Interlocked.Decrement(ref _left) >= 0) throw new InvalidOperationException("queue unavailable (synthetic)");
+            Requests.Enqueue(request);
+            return Task.FromResult(new RunTicket("fake/" + request.IntakeId, true));
+        }
+    }
+
+    [Fact]
+    public async Task A_delivery_that_fails_after_claiming_frees_the_key_for_an_immediate_retry()
+    {
+        var flaky = new FlakyRunStarter(failures: 1);
+        using var k = new IntakeKit(services: sc => sc.Replace(ServiceDescriptor.Singleton<IRunStarter>(flaky)));
+        var body = IntakeKit.Fixture("blackduck-sca.sarif.json");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default));
+        var failed = k.Ledger.Get(IntakeKit.Meta().IdempotencyKey)!;
+        Assert.Equal(IntakeStatus.Failed, failed.Status);
+        Assert.Contains("InvalidOperationException", failed.Detail);
+        var retry = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default);   // no lease wait, no false "duplicate"
+        Assert.Equal(202, retry.StatusCode);
+        Assert.Single(flaky.Requests);
+        var rec = k.Ledger.Get(IntakeKit.Meta().IdempotencyKey)!;
+        Assert.Equal((IntakeStatus.Queued, failed.IntakeId), (rec.Status, rec.IntakeId));   // same intake resumed (stable finding ids)
+        var dup = await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default);
+        Assert.Equal((200, "duplicate"), (dup.StatusCode, Status(dup)));
+    }
+
+    sealed class RejectingValidator : IFindingSchemaValidator
+    {
+        public string? ValidateFinding(Finding finding) => "synthetic schema failure";
+    }
+
+    [Fact]
+    public async Task A_payload_rejected_after_the_claim_is_rejected_again_on_retry_not_reported_as_duplicate()
+    {
+        using var k = new IntakeKit(services: sc => sc.Replace(ServiceDescriptor.Singleton<IFindingSchemaValidator>(new RejectingValidator())));
+        var body = IntakeKit.Fixture("blackduck-sca.sarif.json");
+        Assert.Equal(422, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default)).StatusCode);
+        Assert.Equal(IntakeStatus.Failed, k.Ledger.Get(IntakeKit.Meta().IdempotencyKey)!.Status);
+        Assert.Equal(422, (await k.Acceptor.AcceptAsync(IntakeKit.Meta(), body, "test", default)).StatusCode);
+        Assert.Empty(k.Runs.Requests);
+    }
+
+    [Fact]
+    public void Only_one_of_two_concurrent_takeovers_of_a_stale_claim_wins()
+    {
+        using var k = new IntakeKit();
+        var key = IntakeKit.Meta().IdempotencyKey;
+        k.Ledger.TryClaim(new IntakeRecord { Key = key, ClaimToken = "t0", UpdatedAt = DateTime.UtcNow.AddHours(-1) }, out _);
+        Assert.Equal(LedgerWriteResult.Updated, k.Ledger.TryUpdate(new IntakeRecord { Key = key, ClaimToken = "t1" }, "t0"));
+        Assert.Equal(LedgerWriteResult.LostOwnership, k.Ledger.TryUpdate(new IntakeRecord { Key = key, ClaimToken = "t2" }, "t0"));
+        Assert.Equal(LedgerWriteResult.NotFound, k.Ledger.TryUpdate(new IntakeRecord { Key = "no-such-key", ClaimToken = "t3" }, "t0"));
+        Assert.Equal("t1", k.Ledger.Get(key)!.ClaimToken);
     }
 }
 
@@ -588,7 +665,47 @@ public class IntakeRunPathTests
         Assert.Equal(("synthetic-org/sample-orders", 7), Assert.Single(k.Launcher.Started));
         var rec = k.Ledger.Get(meta.IdempotencyKey)!;
         Assert.Equal((IntakeStatus.RunStarted, k.Launcher.RunId), (rec.Status, rec.RunId!.Value));
+        Assert.Equal(meta.HeadSha, Assert.Single(k.Launcher.ExpectedShas));   // the run is pinned to the scanned commit
         Assert.Equal(IntakeStatus.BacklogPending, k.Ledger.Get(backlog.IdempotencyKey)!.Status);
+    }
+
+    [Fact]
+    public async Task A_pr_that_moved_on_before_the_run_started_marks_the_intake_superseded_not_started()
+    {
+        using var k = new IntakeKit(fakeRunStarter: false);
+        var meta = IntakeKit.Meta(IntakeFormats.BlackDuckRapid);
+        await k.Acceptor.AcceptAsync(meta, IntakeKit.Fixture("blackduck-rapid.json"), "test", default);
+        k.Launcher.CurrentHeadSha = new string('f', 40);                   // a newer push landed after the scanner uploaded
+        var source = k.Services.GetRequiredService<IIntakeRunSource>();
+        await k.Services.GetRequiredService<IntakeRunDispatcher>().HandleAsync((await source.ReceiveAsync(default))!, default);
+        Assert.Empty(k.Launcher.Started);
+        var rec = k.Ledger.Get(meta.IdempotencyKey)!;
+        Assert.Equal(IntakeStatus.Superseded, rec.Status);
+        Assert.Null(rec.RunId);
+        Assert.Contains("fffffff", rec.Detail);
+        Assert.Null(await source.ReceiveAsync(default));                    // completed, not retried
+        // a retry of the same delivery is a duplicate (the payload was accepted; it is just outdated)
+        Assert.Equal(200, (await k.Acceptor.AcceptAsync(meta, IntakeKit.Fixture("blackduck-rapid.json"), "test", default)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Blob_path_honours_the_intake_switch_and_the_drop_folder_keeps_files_for_later()
+    {
+        using var k = new IntakeKit(o => o.Enabled = false);
+        var w = k.Services.GetRequiredService<LocalFileDropWatcher>();
+        Directory.CreateDirectory(w.Folder);
+        File.WriteAllBytes(Path.Combine(w.Folder, "pr7.sarif.json"), IntakeKit.Fixture("blackduck-sca.sarif.json"));
+        File.WriteAllText(Path.Combine(w.Folder, "pr7.sarif.json.meta.json"), JsonSerializer.Serialize(new
+        {
+            repo = "synthetic-org/sample-orders", pr = "7", head_sha = IntakeKit.Sha, scanner = "blackduck", run_id = "drop-off-1",
+        }));
+        var done = await w.ScanAsync(default);
+        Assert.Equal(503, Assert.Single(done).Result.StatusCode);
+        Assert.Empty(k.Runs.Requests);
+        Assert.Empty(k.Ledger.All());
+        Assert.False(Directory.Exists(Path.Combine(k.Root, "blob", "raw")));
+        Assert.True(File.Exists(Path.Combine(w.Folder, "pr7.sarif.json")));          // not moved to rejected/
+        Assert.False(Directory.Exists(Path.Combine(w.Folder, "rejected")));
     }
 
     [Fact]

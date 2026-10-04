@@ -37,7 +37,19 @@ public interface IFindingSchemaValidator
 /// <summary>Starts a PR run exactly like POST /api/runs (implemented by the host over the pipeline's RunService).</summary>
 public interface IPrRunLauncher
 {
-    Task<Guid> StartPrRunAsync(string repo, int prNumber, CancellationToken ct);
+    /// <param name="expectedHeadSha">The commit the run is for (pushed findings are about one exact commit). The run starts only if the
+    /// PR head still equals it, checked on the same PR snapshot the run uses; otherwise nothing starts and the result is superseded.
+    /// Null = whatever the head is now (manual runs).</param>
+    Task<PrRunStart> StartPrRunAsync(string repo, int prNumber, string? expectedHeadSha, CancellationToken ct);
+}
+
+/// <summary>Outcome of <see cref="IPrRunLauncher.StartPrRunAsync"/>: a started run, or "superseded" (the PR head moved past the
+/// expected commit; <see cref="CurrentHeadSha"/> is the new head).</summary>
+public sealed record PrRunStart(Guid? RunId, string CurrentHeadSha)
+{
+    public bool Started => RunId is not null;
+    public static PrRunStart Run(Guid runId, string headSha) => new(runId, headSha);
+    public static PrRunStart Superseded(string currentHeadSha) => new(null, currentHeadSha);
 }
 
 /// <summary>Whether a new run may start now (false while a run is active or the kill switch is on).</summary>

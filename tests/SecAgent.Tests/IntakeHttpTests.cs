@@ -89,7 +89,10 @@ public sealed class IntakeHttpTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Conflict, c3);
         Assert.Single(_kit.Runs.Requests);
 
-        var list = JsonDocument.Parse(await _http.GetStringAsync($"{_base}/api/intake")).RootElement;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _http.GetAsync($"{_base}/api/intake")).StatusCode);   // listing is authenticated
+        using var listRes = await _http.SendAsync(IntakeListingAuthTests.SignedList(_base, IntakeKit.Secret));
+        Assert.Equal(HttpStatusCode.OK, listRes.StatusCode);
+        var list = JsonDocument.Parse(await listRes.Content.ReadAsStringAsync()).RootElement;
         var row = Assert.Single(list.EnumerateArray());
         Assert.Equal(meta.HeadSha, row.GetProperty("head_sha").GetString());
         Assert.Equal(6, row.GetProperty("findings").GetInt32());
@@ -240,4 +243,113 @@ public sealed class IntakeHttpTests : IAsyncLifetime
 
     static bool OnPath(string tool) =>
         (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator).Any(d => File.Exists(Path.Combine(d, tool)));
+}
+
+/// <summary>GET /api/intake authorisation over real HTTP: admin token, HMAC-signed request, explicit loopback exemption, 503 when nothing
+/// is configured, and the 503 + Retry-After answer for a payload that is still being processed.</summary>
+public sealed class IntakeListingAuthTests
+{
+    const string AdminToken = "synthetic-admin-token-for-tests";
+
+    public static HttpRequestMessage SignedList(string baseUrl, string secret, long? ts = null)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/intake");
+        var t = (ts ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()).ToString();
+        req.Headers.TryAddWithoutValidation(IntakeHeaders.Timestamp, t);
+        req.Headers.TryAddWithoutValidation(IntakeHeaders.Signature,
+            IntakeSignature.Sign(secret, SecAgent.Intake.Security.HmacSignedReadCredential.Scope, new Dictionary<string, string>(), t, ReadOnlySpan<byte>.Empty));
+        return req;
+    }
+
+    static async Task<(WebApplication App, IntakeKit Kit, string Base)> Start(Action<IntakeOptions> configure, Action<IServiceCollection>? services = null)
+    {
+        var kit = new IntakeKit(configure, services: services);
+        var b = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
+        b.Logging.ClearProviders();
+        b.WebHost.UseUrls("http://127.0.0.1:0");
+        kit.Wire(b.Services);
+        var app = b.Build();
+        app.MapSecAgentIntake();
+        await app.StartAsync();
+        return (app, kit, app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.First().TrimEnd('/'));
+    }
+
+    static async Task Stop(WebApplication app, IntakeKit kit) { await app.StopAsync(); await app.DisposeAsync(); kit.Dispose(); }
+
+    static HttpRequestMessage Get(string url, string? bearer = null, string? forwardedFor = null)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        if (bearer != null) req.Headers.Authorization = new("Bearer", bearer);
+        if (forwardedFor != null) req.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
+        return req;
+    }
+
+    [Fact]
+    public async Task Listing_needs_an_admin_token_or_a_signed_request()
+    {
+        var env = "SECAGENT_INTAKE_TEST_ADMIN_" + Guid.NewGuid().ToString("N")[..6];
+        Environment.SetEnvironmentVariable(env, AdminToken);
+        var (app, kit, url) = await Start(o => o.AdminTokenEnv = env);
+        try
+        {
+            using var http = new HttpClient();
+            var anon = await http.SendAsync(Get($"{url}/api/intake"));
+            Assert.Equal(HttpStatusCode.Unauthorized, anon.StatusCode);
+            Assert.Contains("credentials required", await anon.Content.ReadAsStringAsync());
+            Assert.Equal(HttpStatusCode.Unauthorized, (await http.SendAsync(Get($"{url}/api/intake", bearer: "wrong-token"))).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await http.SendAsync(Get($"{url}/api/intake", bearer: AdminToken))).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await http.SendAsync(SignedList(url, IntakeKit.Secret))).StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await http.SendAsync(SignedList(url, "wrong-secret"))).StatusCode);
+            Assert.Equal(HttpStatusCode.Unauthorized, (await http.SendAsync(SignedList(url, IntakeKit.Secret, DateTimeOffset.UtcNow.AddHours(-1).ToUnixTimeSeconds()))).StatusCode);
+        }
+        finally { await Stop(app, kit); Environment.SetEnvironmentVariable(env, null); }
+    }
+
+    [Fact]
+    public async Task Without_any_configured_credential_the_listing_is_503_and_loopback_is_only_exempt_when_enabled()
+    {
+        var (app, kit, url) = await Start(o => { o.ListingAcceptsHmac = false; o.AdminTokenEnv = "SECAGENT_INTAKE_TEST_UNSET_" + Guid.NewGuid().ToString("N")[..6]; });
+        try
+        {
+            using var http = new HttpClient();
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, (await http.SendAsync(Get($"{url}/api/intake"))).StatusCode);   // never open by default
+        }
+        finally { await Stop(app, kit); }
+
+        (app, kit, url) = await Start(o => { o.ListingAcceptsHmac = false; o.ListingAllowsLoopback = true; });
+        try
+        {
+            using var http = new HttpClient();
+            Assert.Equal(HttpStatusCode.OK, (await http.SendAsync(Get($"{url}/api/intake"))).StatusCode);
+            // through a proxy / tunnel on the same host the peer is local too: proxy headers void the exemption
+            Assert.Equal(HttpStatusCode.Unauthorized, (await http.SendAsync(Get($"{url}/api/intake", forwardedFor: "203.0.113.9"))).StatusCode);
+        }
+        finally { await Stop(app, kit); }
+    }
+
+    [Fact]
+    public async Task A_payload_still_being_processed_gets_503_with_retry_after()
+    {
+        var (app, kit, url) = await Start(_ => { });
+        try
+        {
+            var body = IntakeKit.Fixture("blackduck-sca.sarif.json");
+            var meta = IntakeKit.Meta(runId: "busy-1");
+            kit.Services.GetRequiredService<IIntakeLedger>().TryClaim(new IntakeRecord { Key = meta.IdempotencyKey, BodySha256 = SecAgent.Core.Hashing.Sha256(body) }, out _);
+            var req = new HttpRequestMessage(HttpMethod.Post, $"{url}/api/intake/{meta.Format}") { Content = new ByteArrayContent(body) };
+            req.Content.Headers.ContentType = new("application/json");
+            var headers = IntakeSignature.HeadersFor(meta);
+            foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
+            var t = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+            req.Headers.TryAddWithoutValidation(IntakeHeaders.Timestamp, t);
+            req.Headers.TryAddWithoutValidation(IntakeHeaders.Signature, IntakeSignature.Sign(IntakeKit.Secret, meta.Format, headers, t, body));
+            using var http = new HttpClient();
+            using var res = await http.SendAsync(req);
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, res.StatusCode);
+            Assert.True(res.Headers.RetryAfter?.Delta > TimeSpan.Zero);
+            Assert.Contains("in_progress", await res.Content.ReadAsStringAsync());
+            Assert.Empty(kit.Runs.Requests);
+        }
+        finally { await Stop(app, kit); }
+    }
 }
