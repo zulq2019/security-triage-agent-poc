@@ -80,7 +80,7 @@ type agentOverride = {
   maxReplicas: int?
   @description('Full image reference (prefer a digest).')
   image: string?
-  @description('Key Vault references exposed as env vars. The secret must exist in the platform vault first.')
+  @description('Key Vault references exposed as env vars. The secret must exist in the target vault (platform, or the tenant\'s) first.')
   keyVaultReferences: keyVaultReference[]?
 }
 
@@ -94,11 +94,13 @@ type containerResources = {
 }
 
 @export()
-@description('A secret in the platform Key Vault exposed to the container as an env var.')
+@description('A Key Vault secret exposed to the container as an env var: from the platform vault, or from one tenant\'s vault.')
 type keyVaultReference = {
   envName: string
   @description('Key Vault secret name (lowercase letters, digits and hyphens).')
   secretName: string
+  @description('Tenant code (one of the tenants parameter) whose vault holds the secret. Omit for the platform vault.')
+  tenant: string?
 }
 
 @export()

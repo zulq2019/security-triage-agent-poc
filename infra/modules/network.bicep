@@ -30,7 +30,10 @@ param tags object
 
 // Private DNS zone names. environment().suffixes keeps these correct in sovereign clouds.
 var zoneBlob = 'privatelink.blob.${environment().suffixes.storage}'
-var zoneKeyVault = 'privatelink${environment().suffixes.keyvaultDns}'
+// Key Vault private endpoints register in privatelink.vaultcore.*, not privatelink.vault.* (the keyvaultDns suffix is
+// .vault.azure.net / .vault.azure.cn / .vault.usgovcloudapi.net, so swap the label: privatelink.vaultcore.azure.net in AzureCloud).
+// https://learn.microsoft.com/azure/private-link/private-endpoint-dns
+var zoneKeyVault = 'privatelink${replace(environment().suffixes.keyvaultDns, '.vault.', '.vaultcore.')}'
 var zoneSql = 'privatelink${environment().suffixes.sqlServerHostname}'
 var zoneServiceBus = 'privatelink.servicebus.windows.net'
 var zoneOpenAi = 'privatelink.openai.azure.com'

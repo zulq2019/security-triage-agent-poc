@@ -637,6 +637,9 @@ var strongModel = deployOpenAi
   ? (length(openAiDeployments) > 1 ? openAiDeployments[1].name : smallModel)
   : existingModelNames.strong
 var platformVault = keyVaults.outputs.vaults[0]
+// Tenant code -> vault URI (vaultSpecs puts the platform vault first, then one vault per tenant in parameter order).
+// Exposed to the apps that read Key Vault, so per-tenant connector secrets stay in the tenant's vault.
+var tenantVaultUris = toObject(range(0, length(tenants)), i => tenants[i], i => keyVaults.outputs.vaults[i + 1].uri)
 
 module containerApps 'modules/containerapp.bicep' = [
   for (a, i) in agents: {
@@ -680,6 +683,9 @@ module containerApps 'modules/containerapp.bicep' = [
           { name: 'SECAGENT_KEYVAULT_URI', value: platformVault.uri }
           { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: monitoring.outputs.appInsightsConnectionString }
         ],
+        (a.keyVault && !empty(tenants))
+          ? [{ name: 'SECAGENT_TENANT_KEYVAULT_URIS', value: string(tenantVaultUris) }]
+          : [],
         a.sql == 'none'
           ? []
           : [
@@ -701,7 +707,8 @@ module containerApps 'modules/containerapp.bicep' = [
       keyVaultSecrets: map(a.keyVaultReferences, s => {
         envName: s.envName
         secretName: toLower(s.secretName)
-        keyVaultSecretUri: '${platformVault.uri}secrets/${s.secretName}'
+        // A tenant that is not in the tenants parameter fails the deployment (missing key) instead of silently using the platform vault.
+        keyVaultSecretUri: '${empty(s.?tenant ?? '') ? platformVault.uri : tenantVaultUris[s.tenant!]}secrets/${s.secretName}'
       })
       tags: union(tags, { app: a.name })
     }
@@ -720,6 +727,7 @@ output queues array = queueNames
 output topic object = { name: serviceBus.outputs.topicName, subscriptions: topicSubscriptions }
 output blobContainers array = map(containers, c => c.name)
 output keyVaultUri string = platformVault.uri
+output tenantKeyVaultUris object = tenantVaultUris
 output sqlServerFqdn string = sql.outputs.serverFqdn
 output sqlDatabase string = sql.outputs.databaseName
 output modelBaseUrl string = modelBaseUrl

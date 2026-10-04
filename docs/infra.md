@@ -144,7 +144,7 @@ Every resource is tagged `workload`, `environment`, `deploymentModel`, `owner`, 
 | Key Vault (platform) | `kv-secagent-dev-xxxxx` | keyvault | RBAC mode, soft delete, purge protection (param), audit logs; no secrets created |
 | Key Vault per tenant | `kv-<tenant>-dev-xxxxx` | keyvault | One per entry in `tenants` (Wipro-hosted); connector tokens per customer (SDD 18.1) |
 | Service Bus namespace | `sb-secagent-dev-uks-xxxxx` | servicebus | Local (SAS) auth off, TLS 1.2; Standard (dev) or Premium |
-| Queues | `runs`, `scan`, `triage`, `fix-library`, `fix-secret`, `fix-code`, `fix-binary`, `verify`, `results` | servicebus | Sessions (SessionId = run id), duplicate detection, max delivery count, lock duration, TTL, dead-letter on expiry |
+| Queues | `runs`, `scan`, `triage`, `fix-library`, `fix-secret`, `fix-code`, `fix-binary`, `verify`, `results` | servicebus | Sessions (SessionId = run id; on `runs` the intake uses the run target `owner/repo#pr`, see below), duplicate detection, max delivery count, lock duration, TTL, dead-letter on expiry |
 | Topic + subscriptions | `run-events` → `dashboard`, `audit` (+ `extraTopicSubscriptions`) | servicebus | Pub/sub for run progress |
 | Dead-letter alert | `alert-sb-…-deadletter` | servicebus | Fires on any dead-lettered message (needs an action group) |
 | Storage account | `stsecagentdevxxxxx` | storage | Shared keys off, no public blobs, TLS 1.2, infrastructure encryption, soft delete |
@@ -187,7 +187,11 @@ server needs no directory-read permission) and adds it to `secagent_reader`, `se
 `Authentication=Active Directory Managed Identity`) for apps with a SQL role, and `SECAGENT_MODEL_PROVIDER`,
 `SECAGENT_MODEL_BASE_URL`, `SECAGENT_SMALL_MODEL`, `SECAGENT_STRONG_MODEL` for model apps when a model endpoint
 is configured. Secrets (for example `SECAGENT_HMAC_KEY`) are added as **Key Vault references** with
-`agentOverrides.<agent>.keyVaultReferences` once the secret exists in the vault.
+`agentOverrides.<agent>.keyVaultReferences` once the secret exists in the vault. A reference reads the platform vault
+by default; add `tenant: '<code>'` to read that tenant's vault instead (an unknown tenant code fails the deployment).
+In a multi-tenant deployment, apps with Key Vault access also get `SECAGENT_TENANT_KEYVAULT_URIS`, a JSON object
+`{ "<tenant>": "https://kv-<tenant>-….vault.azure.net/" }`, so connector secret references (`kv:<vault url>/secrets/<name>`)
+can point at the tenant's own vault without copying tokens into the shared platform vault (output `tenantKeyVaultUris`).
 
 > The POC code today reads `SECAGENT_SQL`, `SECAGENT_HMAC_KEY` and the `SECAGENT_MODEL_*` variables. The other
 > names are a proposed contract for the Service Bus / Blob / Key Vault adapters that the code does not have yet.
@@ -377,8 +381,10 @@ moves the bill, roughly in order of likely impact:
   (namespace scope or Data Owner) to read message counts; confirm on the first deployment and widen only if
   needed. Also confirm the scaler and Key Vault references work through private endpoints in a VNet-integrated
   environment.
-- **Sessions:** every queue requires sessions (SessionId = run id). Decision OD-03 may make `triage`
-  sessionless (`sessionlessQueues` parameter). Values marked `[to agree]` in SDD 7.4 (max delivery count, TTL,
+- **Sessions:** every queue requires sessions (SessionId = run id). On `runs`, which carries run *requests*, the
+  intake (PR #2, `RunQueueConvention`) sends SessionId = the run target (`owner/repo#<pr>` or `owner/repo@<ref>`), so
+  one PR's requests are handed out in order. Decision OD-03 may make `triage` sessionless (`sessionlessQueues`
+  parameter); if `runs` is ever made sessionless, set `Intake__Azure__RunQueueRequiresSession=false` on the intake and orchestrator. Values marked `[to agree]` in SDD 7.4 (max delivery count, TTL,
   lock duration, duplicate window) are parameters with the POC defaults.
 - **Code changes needed before real images run:** Service Bus / Blob / Key Vault adapters behind the existing
   interfaces (`IMessageQueue`, blob store), and managed-identity (token) auth for the `azureopenai` provider,
