@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Optional notifier: posts an Adaptive Card to a Microsoft Teams channel through a Workflows (Power Automate) webhook URL.
+       The URL is itself a secret (anyone holding it can post), so it is a secret reference, never a setting. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+  </ItemGroup>
+</Project>

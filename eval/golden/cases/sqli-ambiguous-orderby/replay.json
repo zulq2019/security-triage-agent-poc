@@ -1,0 +1,16 @@
+{
+  "case_id": "sqli-ambiguous-orderby",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "4bde9e3ab7228bb699d5a5b65f7eccf0f6565ad076be45975ba2fd72b18e0417",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Caller-controlled ORDER BY identifier. Parameters cannot bind identifiers; the allowed sort columns are not known from the code.",
+        "confidence": 0.45
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "id": "path-traversal",
+  "title": "Path traversal: file name from the caller joined to a base folder",
+  "category": "path_traversal",
+  "description": "Read(name) joins caller input to the report folder without canonicalising, so \"../\" escapes it. Expected: resolve the full path and refuse anything outside the folder.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Reports/ReportStore.cs",
+      "regex": "Path\\.GetFullPath\\("
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Reports/ReportStore.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "file-read-of-joined-path",
+    "file": "src/App/Reports/ReportStore.cs"
+  }
+}

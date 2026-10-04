@@ -1,0 +1,74 @@
+# Deterministic rescan rules used by the evaluation harness only (RegexRuleScanner).
+# They stand in for gitleaks / Trivy / Semgrep / binary_check so CI needs no scanner installs. Each golden case names the rule that must be
+# gone after a fix (case.json "target"); every rule is also used for "no new findings" (hits per rule+file after vs before).
+# Kinds: regex (per line) | absent (file in scope via `when`, but `pattern` nowhere) | dependency (PackageReference below a version) | binary.
+rules:
+  # --- secrets (gitleaks stand-in)
+  - id: secret-cloud-access-key
+    title: Cloud access key id literal
+    pattern: 'AKIA[A-Z2-7]{16}'
+  - id: secret-payment-key
+    title: Payment provider API key literal
+    pattern: 'sk_(test|live)_[0-9A-Za-z]{16,}'
+  - id: secret-github-token
+    title: GitHub personal access token literal
+    pattern: 'ghp_[0-9A-Za-z]{36}'
+  # --- dependencies (Trivy stand-in; synthetic advisories)
+  - id: vulnerable-package
+    title: PackageReference below the fixed version of a (synthetic) advisory
+    kind: dependency
+    packages:
+      - { package: Newtonsoft.Json, below: 13.0.1 }
+      - { package: AutoMapper, below: 9.0.0 }
+  - id: end-of-life-target-framework
+    title: Project targets an end-of-life .NET runtime
+    globs: ['**/*.csproj']
+    pattern: '<TargetFramework>net(5|6|7)\.0</TargetFramework>'
+  # --- code (Semgrep stand-in)
+  - id: sql-built-from-input
+    title: SQL text built by concatenation or interpolation
+    globs: ['**/*.cs']
+    pattern: 'CommandText\s*=\s*(\$".*\{|".*"\s*\+\s*[A-Za-z_])'
+  - id: file-read-of-joined-path
+    title: File read of a path joined from input without canonicalisation
+    globs: ['**/*.cs']
+    pattern: 'File\.(ReadAllText|ReadAllBytes|ReadAllLines|OpenRead)\(\s*Path\.Combine\('
+  - id: weak-hash-algorithm
+    title: MD5 / SHA-1 used
+    globs: ['**/*.cs']
+    pattern: '\b(MD5|SHA1)\.(Create|HashData)\b|new\s+(MD5CryptoServiceProvider|SHA1Managed)\b'
+  - id: insecure-random
+    title: System.Random used (non-cryptographic)
+    globs: ['src/**/*.cs']
+    pattern: 'new\s+Random\('
+  - id: unsafe-type-name-handling
+    title: Newtonsoft TypeNameHandling other than None
+    globs: ['**/*.cs']
+    pattern: 'TypeNameHandling\.(All|Auto|Objects|Arrays)'
+  - id: razor-html-raw
+    title: Html.Raw in a Razor view
+    globs: ['**/*.cshtml']
+    pattern: 'Html\.Raw\('
+  - id: html-response-concatenation
+    title: text/html response built from unencoded values
+    globs: ['**/*.cs']
+    pattern: '^(?!.*Encode\().*Content\(.*(\+|\{).*"text/html"'
+  - id: http-fetch-of-caller-url
+    title: HttpClient fetch of a raw caller-supplied URL string
+    globs: ['**/*.cs']
+    pattern: 'Get(ByteArray|String|Stream)?Async\(\s*url\s*\)'
+  - id: endpoint-without-authorize
+    title: State-changing endpoint in a file with no [Authorize]
+    kind: absent
+    globs: ['**/*Controller.cs']
+    when: '\[Http(Post|Put|Patch|Delete)\b'
+    pattern: '\[Authorize\b'
+  - id: copyleft-licence-header
+    title: GPL/AGPL licence header in the source tree
+    globs: ['**/*.cs']
+    pattern: 'SPDX-License-Identifier:\s*A?GPL'
+  # --- binaries (binary_check stand-in)
+  - id: committed-binary
+    title: Compiled binary (PE) committed
+    kind: binary
+    extensions: [.dll, .exe]

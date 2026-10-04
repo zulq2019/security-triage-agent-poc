@@ -1,0 +1,24 @@
+{
+  "case_id": "weak-random-token",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "ac53a1abc47e8076fdb195ab42272592820204edcdc29c1839483b081831145a",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Security token derived from System.Random, which is predictable (CWE-338). Use a CSPRNG.",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "15f2d06705fc34816b8fe6f1b7edcfd2a9811cb5639857f1fb7f85a946ec9e56",
+      "response": {
+        "method_code": "public string NewToken()\n{\n    var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);\n    return Convert.ToHexString(bytes);\n}\n",
+        "test_code": "[Fact]\npublic void NewToken_values_do_not_repeat()\n{\n    var g = new ResetTokenGenerator();\n    var tokens = Enumerable.Range(0, 50).Select(_ => g.NewToken()).ToHashSet();\n    Assert.Equal(50, tokens.Count);\n}\n",
+        "explanation": "Use RandomNumberGenerator.GetBytes (CSPRNG); the token is still 32 bytes as hex."
+      }
+    }
+  }
+}

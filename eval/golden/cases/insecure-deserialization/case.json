@@ -1,0 +1,44 @@
+{
+  "id": "insecure-deserialization",
+  "title": "Insecure deserialization: TypeNameHandling.All on queue input",
+  "category": "insecure_deserialization",
+  "description": "Messages from a queue are deserialised with TypeNameHandling.All, letting the payload choose the .NET type. Expected: TypeNameHandling.None, and a test that a $type payload is ignored.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_absent",
+      "file": "src/App/Messaging/OrderMessageReader.cs",
+      "regex": "TypeNameHandling\\.(All|Auto|Objects|Arrays)"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Messaging/OrderMessageReader.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "unsafe-type-name-handling",
+    "file": "src/App/Messaging/OrderMessageReader.cs"
+  }
+}

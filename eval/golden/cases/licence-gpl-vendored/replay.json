@@ -1,0 +1,27 @@
+{
+  "case_id": "licence-gpl-vendored",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "7915b9d3d59c8c99f802df88cfb18505e5fddc5d888e8bc492e31c25d6b92668",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Copyleft GPL-3.0 code vendored into a proprietary application: licence clash, a human must decide.",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "abf4c5e95b6f103cdfaf0dbde248d5b245f2116dc577a76b6f1b10d3468a44d4",
+      "response": {
+        "alternatives": [
+          "Replace with a permissively licensed CSV library (e.g. MIT-licensed CsvHelper)",
+          "Re-implement the 5-line escape helper in-house from the RFC 4180 rules",
+          "Ask legal for a documented exception"
+        ],
+        "reviewer_note": "CsvEscaper is used only by CsvExporter.Row; replacing it is small. Licensing decisions stay with AppSec/legal."
+      }
+    }
+  }
+}

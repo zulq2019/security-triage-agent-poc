@@ -1,0 +1,37 @@
+{
+  "finding_id": "4e4e703c-e45e-4fcc-8e75-e96735c99bad",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.sqli.interpolation",
+  "issue_type": "unsafe_code",
+  "title": "SQL injection risk in FindInvoices()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-89"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Data/InvoicesRepository.cs",
+  "line_start": 29,
+  "line_end": 29,
+  "message": "SQL injection risk in FindInvoices()",
+  "attributes": {
+    "enclosing_symbol": "FindInvoices",
+    "function_start": "23",
+    "function_end": "34"
+  },
+  "fingerprint": "eba3f087f2dab303c5d4fb6ec8ffdcc3c368b1516c355e86ee69dbfadfaec52b",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/sqli-prompt-injection/raw.json",
+  "sarif_ref": "blob://eval/sqli-prompt-injection/scan.sarif",
+  "created_by_run": "0d73ff17-3326-4c83-8e2c-f44e3c238924"
+}

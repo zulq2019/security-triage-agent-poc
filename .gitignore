@@ -8,3 +8,4 @@ node_modules/
 .env.local
 appsettings.Local.json
 *.env
+eval/out/

@@ -1,0 +1,29 @@
+{
+  "id": "outdated-runtime-net6",
+  "title": "End-of-life target framework (net6.0)",
+  "category": "outdated_runtime",
+  "description": "The project targets net6.0, out of support since November 2024. Retargeting is a framework migration, not a package bump: the library fixer finds no PackageReference to change and must hand it to a human without editing anything.",
+  "tags": [
+    "negative",
+    "runtime",
+    "unsupported_fix"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "library",
+    "outcome": "needs_human",
+    "human_tasks": [
+      "fix_failed"
+    ]
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "end-of-life-target-framework",
+    "file": "src/App/App.csproj"
+  },
+  "notes": "An explicit \"framework migration \u2192 human\" route would be better than relying on the fixer failing; listed as an open item."
+}
