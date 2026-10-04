@@ -92,8 +92,11 @@ commit scanned by the same workflow run is the same evidence).
   (local: `.data/blob/raw/…`; Azure: the same path in a Blob container). Secret snippets are removed before storage.
 * **Canonical findings**: the same `Finding` record and JSON schema the built-in gitleaks/Trivy/Semgrep adapters produce
   (severity mapping reuses `FindingNormalisation.Severity`, shared with the built-in adapters), stored next to the raw file as `.canonical.json`, each tagged `attributes.intake_id`.
-* **Run**: `IRunStarter` enqueues a message (local queue `intake-runs`, message id = idempotency key; Azure: a Service Bus queue
-  with duplicate detection on the same id). The dispatcher waits until no run is active and the kill switch is off, then starts the
+* **Run**: `IRunStarter` enqueues a message on the queue `runs` (`RunQueueConvention`; the same name locally and in Service Bus, and
+  the queue `infra/agents.bicep` creates). Message id = idempotency key (Service Bus duplicate detection uses it); session id = the run
+  target (`owner/repo#<pr>`, or `owner/repo@<ref>`), so the session-enabled Bicep queue works as created and one PR's requests are
+  handed out in order. If an environment lists `runs` in the Bicep `sessionlessQueues`, set `Intake__Azure__RunQueueRequiresSession=false`.
+  The dispatcher waits until no run is active and the kill switch is off, then starts the
   same PR run `POST /api/runs` starts. During that run the scanner stage adds the pushed findings for that exact repo + head SHA to its
   own scanner output (`IExternalFindingSource`), so they flow through triage, fixing and human review like any other finding.
 * **Verification limit (by design)**: the local re-scan cannot confirm a Black Duck finding is gone, so a fix for an external finding

@@ -25,7 +25,11 @@ public sealed class AzureIntakeOptions
     public string RawContainer { get; set; } = "raw";
     /// <summary>Fully qualified Service Bus namespace, e.g. secagent.servicebus.windows.net (queue with duplicate detection on).</summary>
     public string ServiceBusNamespace { get; set; } = "";
-    public string RunQueueName { get; set; } = "intake-runs";
+    /// <summary>Run queue (<see cref="RunQueueConvention.QueueName"/>, created by infra/agents.bicep).</summary>
+    public string RunQueueName { get; set; } = RunQueueConvention.QueueName;
+    /// <summary>True (default) when the queue is session-enabled, as the Bicep creates it. Set false only if the queue is listed in the
+    /// Bicep parameter sessionlessQueues. Sends always carry the session key; this switch only selects the receiver type.</summary>
+    public bool RunQueueRequiresSession { get; set; } = true;
     public int ReceiveWaitSeconds { get; set; } = 5;
 }
 
@@ -78,43 +82,80 @@ public sealed class AzureBlobReader(BlobServiceClient service) : IBlobReader
 }
 
 /// <summary>Service Bus adapter for both sides of the run queue. MessageId = idempotency key: with duplicate detection enabled on the
-/// queue, a second copy is dropped by the broker. Abandoned messages are redelivered and dead-lettered after MaxDeliveryCount.</summary>
+/// queue, a second copy is dropped by the broker. SessionId = <see cref="RunQueueConvention.SessionId"/> (the run target), so it works
+/// with the session-enabled <c>runs</c> queue from the Bicep. Abandoned messages are redelivered and dead-lettered after MaxDeliveryCount.</summary>
 public sealed class ServiceBusIntakeRunQueue : IRunStarter, IIntakeRunSource, IAsyncDisposable
 {
+    readonly ServiceBusClient _client;
     readonly ServiceBusSender _sender;
-    readonly ServiceBusReceiver _receiver;
+    readonly ServiceBusReceiver? _receiver;   // sessionless queues only; session-enabled queues accept a session per delivery
     readonly TimeSpan _wait;
     readonly string _queue;
 
     public ServiceBusIntakeRunQueue(ServiceBusClient client, IOptions<AzureIntakeOptions> options)
     {
+        _client = client;
         _queue = options.Value.RunQueueName;
         _sender = client.CreateSender(_queue);
-        _receiver = client.CreateReceiver(_queue);
+        _receiver = options.Value.RunQueueRequiresSession ? null : client.CreateReceiver(_queue);
         _wait = TimeSpan.FromSeconds(options.Value.ReceiveWaitSeconds);
     }
 
+    /// <summary>The message sent for a run request (exposed for tests).</summary>
+    public static ServiceBusMessage ToMessage(IntakeRunRequest request) => new(BinaryData.FromObjectAsJson(request, Schema.Json))
+    {
+        MessageId = request.IdempotencyKey, SessionId = RunQueueConvention.SessionId(request), ContentType = "application/json", Subject = "intake-run",
+    };
+
     public async Task<RunTicket> EnqueueAsync(IntakeRunRequest request, CancellationToken ct)
     {
-        await _sender.SendMessageAsync(new ServiceBusMessage(BinaryData.FromObjectAsJson(request, Schema.Json))
-        {
-            MessageId = request.IdempotencyKey, ContentType = "application/json", Subject = "intake-run",
-        }, ct);
+        await _sender.SendMessageAsync(ToMessage(request), ct);
         return new RunTicket($"{_queue}/{request.IdempotencyKey[..16]}", true);   // the broker, not us, knows whether it was a duplicate
     }
 
     public async Task<IntakeRunDelivery?> ReceiveAsync(CancellationToken ct)
     {
-        var m = await _receiver.ReceiveMessageAsync(_wait, ct);
-        return m == null ? null : new IntakeRunDelivery(m.Body.ToObjectFromJson<IntakeRunRequest>(Schema.Json)!, m);
+        if (_receiver != null)
+        {
+            var m = await _receiver.ReceiveMessageAsync(_wait, ct);
+            return m == null ? null : new IntakeRunDelivery(m.Body.ToObjectFromJson<IntakeRunRequest>(Schema.Json)!, new Handle(_receiver, m, OwnsReceiver: false));
+        }
+        ServiceBusSessionReceiver session;
+        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct))
+        {
+            timeout.CancelAfter(_wait);
+            try { session = await _client.AcceptNextSessionAsync(_queue, cancellationToken: timeout.Token); }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { return null; }
+            catch (ServiceBusException e) when (e.Reason == ServiceBusFailureReason.ServiceTimeout) { return null; }
+        }
+        var msg = await session.ReceiveMessageAsync(_wait, ct);
+        if (msg == null) { await session.DisposeAsync(); return null; }
+        return new IntakeRunDelivery(msg.Body.ToObjectFromJson<IntakeRunRequest>(Schema.Json)!, new Handle(session, msg, OwnsReceiver: true));
     }
 
-    public Task CompleteAsync(IntakeRunDelivery delivery, CancellationToken ct) => _receiver.CompleteMessageAsync((ServiceBusReceivedMessage)delivery.Handle, ct);
+    public async Task CompleteAsync(IntakeRunDelivery delivery, CancellationToken ct)
+    {
+        var h = (Handle)delivery.Handle;
+        try { await h.Receiver.CompleteMessageAsync(h.Message, ct); } finally { await h.ReleaseAsync(); }
+    }
 
-    public Task AbandonAsync(IntakeRunDelivery delivery, string error, CancellationToken ct) =>
-        _receiver.AbandonMessageAsync((ServiceBusReceivedMessage)delivery.Handle, new Dictionary<string, object> { ["secagent_error"] = error }, ct);
+    public async Task AbandonAsync(IntakeRunDelivery delivery, string error, CancellationToken ct)
+    {
+        var h = (Handle)delivery.Handle;
+        try { await h.Receiver.AbandonMessageAsync(h.Message, new Dictionary<string, object> { ["secagent_error"] = error }, ct); }
+        finally { await h.ReleaseAsync(); }
+    }
 
-    public async ValueTask DisposeAsync() { await _sender.DisposeAsync(); await _receiver.DisposeAsync(); }
+    public async ValueTask DisposeAsync()
+    {
+        await _sender.DisposeAsync();
+        if (_receiver != null) await _receiver.DisposeAsync();
+    }
+
+    sealed record Handle(ServiceBusReceiver Receiver, ServiceBusReceivedMessage Message, bool OwnsReceiver)
+    {
+        public async Task ReleaseAsync() { if (OwnsReceiver) await Receiver.DisposeAsync(); }
+    }
 }
 
 public static class AzureIntakeServiceCollectionExtensions
