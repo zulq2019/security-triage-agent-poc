@@ -1,2 +1,5 @@
 # Synthetic masking-test input in an early commit (current file carries gitleaks:allow)
 944421cb1b2b2e3217f5825edeef3b5fb5582b44:tests/SecAgent.Tests/UnitTests.cs:generic-api-key:46
+# Synthetic AWS-shaped masking-test inputs in early golden-eval commits (replaced by non key-shaped values in d709feb)
+0465148f235450a4c0cd589f4ba3d48eb7629cd1:tests/SecAgent.Eval.Tests/CheckerTests.cs:aws-access-token:134
+8879ac9d2f3885852f757952a2029b5c3ffe3506:tests/SecAgent.Tests/PolicyAndEditsTests.cs:aws-access-token:165
