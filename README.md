@@ -81,7 +81,7 @@ This switch now feeds the model provider **connector** (`openai-compatible`), se
 
 ## Open in Cursor or Claude Code
 
-- **Cursor:** `git clone https://github.com/zulq2019/security-triage-agent-poc && cd security-triage-agent-poc && git checkout feature/slice-1-tracer-bullet && cursor .` (or File → Open Folder). Install the C# Dev Kit extension when prompted; open `SecAgent.slnx`.
+- **Cursor:** `git clone https://github.com/zulq2019/security-triage-agent-poc && cd security-triage-agent-poc && cursor .` (or File → Open Folder). The default branch holds the full POC. Install the C# Dev Kit extension when prompted; open `SecAgent.slnx`.
 - **Claude Code:** in the repo root run `claude`. `CLAUDE.md` points at `AGENTS.md` (build/test commands, layout and the guardrails an assistant must not weaken).
 - Both tools inherit your shell environment, so start them from a terminal where `OPENAI_API_KEY` / `SECAGENT_SQL` are set (or set them at user scope as above).
 
@@ -139,7 +139,8 @@ dotnet src/SecAgent.Dashboard/bin/Debug/net10.0/secagent.dll run --repo zulq2019
 Tests:
 
 ```bash
-dotnet test tests/SecAgent.Tests --filter "Category!=Golden"   # unit tests (needs local SQL + Ollama for the context/routing tests)
+dotnet test tests/SecAgent.Tests --filter "Category!=Golden"   # unit and integration tests (needs local SQL from SECAGENT_SQL)
+dotnet test tests/SecAgent.Eval.Tests                          # eval harness tests (no SQL, no model)
 dotnet test tests/SecAgent.Tests --filter "Category=Golden"    # golden tests against the latest completed run in the store
 scripts/rerun-check.sh                                          # D-06: re-run on the same PR opens no duplicate PRs
 ```
