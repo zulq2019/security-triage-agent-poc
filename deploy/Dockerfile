@@ -137,21 +137,39 @@ RUN case "${TARGETARCH:-amd64}" in \
 # Semgrep in a virtualenv built on the same Ubuntu (noble) as the runtime images, so the venv's python path matches.
 FROM ${ASPNET_IMAGE} AS semgrep
 ARG SEMGREP_VERSION=1.179.0
-RUN apt-get update -o Acquire::Retries=5 \
- && apt-get install -y -o Acquire::Retries=5 --no-install-recommends python3 python3-venv \
- && rm -rf /var/lib/apt/lists/* \
- && python3 -m venv /opt/semgrep \
- && /opt/semgrep/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}" \
- && /opt/semgrep/bin/pip uninstall -y pip \
- && /opt/semgrep/bin/semgrep --version
+RUN set -eu; \
+    i=0; \
+    while true; do \
+      i=$((i+1)); \
+      if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any \
+        && apt-get install -y -o Acquire::Retries=3 --no-install-recommends python3 python3-venv; then \
+        break; \
+      fi; \
+      if [ "$i" -ge 5 ]; then echo "apt failed after $i attempts" >&2; exit 1; fi; \
+      echo "apt failed (attempt $i), retrying" >&2; sleep 20; \
+    done; \
+    rm -rf /var/lib/apt/lists/*; \
+    python3 -m venv /opt/semgrep; \
+    /opt/semgrep/bin/pip install --no-cache-dir --disable-pip-version-check "semgrep==${SEMGREP_VERSION}"; \
+    /opt/semgrep/bin/pip uninstall -y pip; \
+    /opt/semgrep/bin/semgrep --version
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # Tool bases (shared by the targets below).
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM ${ASPNET_IMAGE} AS scanner-base
-RUN apt-get update -o Acquire::Retries=5 \
- && apt-get install -y -o Acquire::Retries=5 --no-install-recommends apt git python3 \
- && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    i=0; \
+    while true; do \
+      i=$((i+1)); \
+      if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any \
+        && apt-get install -y -o Acquire::Retries=3 --no-install-recommends apt git python3; then \
+        break; \
+      fi; \
+      if [ "$i" -ge 5 ]; then echo "apt failed after $i attempts" >&2; exit 1; fi; \
+      echo "apt failed (attempt $i), retrying" >&2; sleep 20; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=tools /opt/tools/bin/gitleaks /opt/tools/bin/trivy /usr/local/bin/
 COPY --from=semgrep /opt/semgrep /opt/semgrep
 ENV PATH="/opt/semgrep/bin:${PATH}" \
@@ -160,9 +178,18 @@ ENV PATH="/opt/semgrep/bin:${PATH}" \
     GIT_TERMINAL_PROMPT=0
 
 FROM ${SDK_IMAGE} AS toolchain-base
-RUN apt-get update -o Acquire::Retries=5 \
- && apt-get install -y -o Acquire::Retries=5 --no-install-recommends apt libbrotli1 python3 \
- && rm -rf /var/lib/apt/lists/*
+RUN set -eu; \
+    i=0; \
+    while true; do \
+      i=$((i+1)); \
+      if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any \
+        && apt-get install -y -o Acquire::Retries=3 --no-install-recommends apt libbrotli1 python3; then \
+        break; \
+      fi; \
+      if [ "$i" -ge 5 ]; then echo "apt failed after $i attempts" >&2; exit 1; fi; \
+      echo "apt failed (attempt $i), retrying" >&2; sleep 20; \
+    done; \
+    rm -rf /var/lib/apt/lists/*
 COPY --from=tools /opt/tools/bin/ /usr/local/bin/
 COPY --from=semgrep /opt/semgrep /opt/semgrep
 ENV PATH="/opt/semgrep/bin:${PATH}" \
