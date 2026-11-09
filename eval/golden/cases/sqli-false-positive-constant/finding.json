@@ -1,0 +1,37 @@
+{
+  "finding_id": "01ab9508-5c52-4cf1-9328-c1a90b0e99f0",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.sqli.concat",
+  "issue_type": "unsafe_code",
+  "title": "SQL injection risk in CountActive()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-89"
+  ],
+  "severity_scanner": "medium",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Data/CatalogRepository.cs",
+  "line_start": 20,
+  "line_end": 20,
+  "message": "SQL injection risk in CountActive()",
+  "attributes": {
+    "enclosing_symbol": "CountActive",
+    "function_start": "15",
+    "function_end": "22"
+  },
+  "fingerprint": "def4abd222846b05d5261238d7f19587f2420745ca4d0703b61289cace273ea4",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/sqli-false-positive-constant/raw.json",
+  "sarif_ref": "blob://eval/sqli-false-positive-constant/scan.sarif",
+  "created_by_run": "75c2b48a-4856-4556-a8b5-344a5ef724bb"
+}

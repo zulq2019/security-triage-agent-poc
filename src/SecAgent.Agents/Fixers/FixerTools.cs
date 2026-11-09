@@ -22,7 +22,7 @@ public static class FixerTools
         }, "Resolve the lowest published stable version of a NuGet package that is >= minVersion.");
 
         s.Tools.Register("keyvault.reference", ([Description("Key Vault secret name")] string secretName, [Description("Vault name")] string vaultName) =>
-            new { reference = $"@Microsoft.KeyVault(VaultName={vaultName};SecretName={secretName})", note = "App Service / Container Apps Key Vault reference syntax; no secret is read or written by the agent." },
+            new { reference = FixEdits.KeyVaultReference(vaultName, secretName), note = "App Service / Container Apps Key Vault reference syntax; no secret is read or written by the agent." },
             "Compose a Key Vault reference string. Never reads or writes secret values.");
 
         s.Tools.Register("ticket.rotation_task", (Guid runId, Guid findingId, string title, string details) =>
@@ -42,7 +42,7 @@ public static class FixerTools
         s.Tools.Register("licence.policy", (string spdx) =>
         {
             var rp = s.Cfg.RulePacks["licence"];
-            string verdict = rp.GetList(rp.Policy, "denied").Contains(spdx) ? "denied" : rp.GetList(rp.Policy, "review").Contains(spdx) ? "review" : rp.GetList(rp.Policy, "allowed").Contains(spdx) ? "allowed" : "unknown";
+            var verdict = FixEdits.LicenceVerdict(rp, spdx);
             return new { spdx, verdict, app_licence = rp.Policy.GetValueOrDefault("app_licence")?.ToString(), authority = rp.Policy.GetValueOrDefault("decision_authority")?.ToString() };
         }, "Check an SPDX licence against the licence policy in the licence rule pack.");
     }

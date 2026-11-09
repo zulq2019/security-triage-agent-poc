@@ -1,0 +1,165 @@
+# CI for every pull request and for main: build + test, secret scan, lint (workflows, Dockerfile, compose).
+# Synthetic data only. No cloud credentials are used or needed here.
+# Third-party actions are pinned by commit SHA; CLI tools are pinned by version and sha256.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  # Same digest as docker-compose.yml so CI and local runs use one SQL Server build.
+  MSSQL_IMAGE: mcr.microsoft.com/mssql/server:2022-latest@sha256:4402d880dd4c34bfa7d8705e56a86cd6c88da80a1f6bbbe741f999e76264a090
+
+jobs:
+  build-test:
+    name: build + test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+
+      # Integration tests use a real SQL Server (the app's store). Throwaway container, throwaway password:
+      # generated per run, masked in logs, never stored anywhere.
+      - name: Start SQL Server (throwaway)
+        run: |
+          set -euo pipefail
+          pw="Ci$(openssl rand -hex 16)!"
+          echo "::add-mask::$pw"
+          docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_PID=Developer -e "MSSQL_SA_PASSWORD=$pw" -p 1433:1433 "$MSSQL_IMAGE"
+          for _ in $(seq 1 60); do
+            if docker exec sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$pw" -Q "SELECT 1" -b -o /dev/null; then break; fi
+            sleep 2
+          done
+          docker exec sql /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P "$pw" -b \
+            -Q "IF DB_ID('SecAgent') IS NULL CREATE DATABASE SecAgent"
+          echo "SECAGENT_SQL=Server=localhost;Database=SecAgent;User Id=sa;Password=$pw;TrustServerCertificate=True;Encrypt=True" >> "$GITHUB_ENV"
+
+      - name: Restore
+        run: dotnet restore SecAgent.slnx
+
+      - name: Build (warnings are errors)
+        run: dotnet build SecAgent.slnx --no-restore -c Release -warnaserror
+
+      # Same code path the app uses on start (SqlStore.EnsureSchema + migrations); the database is empty, so the reset is a no-op.
+      - name: Create schema
+        run: dotnet src/SecAgent.Dashboard/bin/Release/net10.0/secagent.dll reset-db
+
+      # Excluded here, run locally: Golden tests (need the scanner toolchain, sample repos and a completed run) and the one routing
+      # test that needs a live model endpoint (Ollama) to find an available deployment.
+      - name: Test
+        env:
+          TEST_FILTER: Category!=Golden&FullyQualifiedName!~Routing_escalates_high_severity_and_retries_one_tier
+        run: >
+          dotnet test tests/SecAgent.Tests/SecAgent.Tests.csproj --no-build -c Release
+          --filter "$TEST_FILTER"
+          --logger "trx;LogFileName=results.trx" --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-results
+          path: TestResults/
+          retention-days: 14
+
+      - name: Stop SQL Server
+        if: always()
+        run: docker rm -f sql || true
+
+  secrets-scan:
+    name: gitleaks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks (pinned + checksum)
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+
+      # PR: only the commits the PR adds. main / manual: the full history.
+      - name: Scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${BASE_SHA:-}" ]; then
+            gitleaks git --redact --no-banner --exit-code 1 --log-opts="${BASE_SHA}..${HEAD_SHA}" .
+          else
+            gitleaks git --redact --no-banner --exit-code 1 .
+          fi
+
+  lint:
+    name: lint (workflows, Dockerfile, compose)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      HADOLINT_VERSION: 2.15.1
+      # hadolint publishes no checksum file for this asset; this is the sha256 of the release binary, recorded when pinned.
+      HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint + hadolint (pinned + checksum)
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/actionlint.tgz "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          curl -fsSLo /tmp/hadolint "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-x86_64"
+          echo "${HADOLINT_SHA256}  /tmp/hadolint" | sha256sum -c -
+          sudo install -m 0755 /tmp/hadolint /usr/local/bin/hadolint
+
+      - name: actionlint
+        run: actionlint -color
+
+      - name: hadolint
+        run: hadolint deploy/Dockerfile
+
+      - name: Catalogue is valid JSON with unique names
+        run: |
+          set -euo pipefail
+          jq -e '.agents | length > 0' deploy/agents.json > /dev/null
+          dupes="$(jq -r '.agents[].name' deploy/agents.json | sort | uniq -d)"
+          if [ -n "$dupes" ]; then echo "::error::duplicate agent names: $dupes"; exit 1; fi
+
+      - name: docker compose config
+        env:
+          # compose refuses to render without these; nothing starts and they are not secrets
+          MSSQL_SA_PASSWORD: lint-only-not-a-secret
+          SECAGENT_HMAC_KEY: lint-only-not-a-secret
+        run: docker compose -f docker-compose.yml config -q

@@ -1,0 +1,37 @@
+{
+  "finding_id": "c2a3b4f4-7ece-46cb-8e63-8640df2bc92b",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.ssrf.httpclient-user-url",
+  "issue_type": "unsafe_code",
+  "title": "Server-side request forgery in FetchAsync()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-918"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Profiles/AvatarFetcher.cs",
+  "line_start": 14,
+  "line_end": 14,
+  "message": "Server-side request forgery in FetchAsync()",
+  "attributes": {
+    "enclosing_symbol": "FetchAsync",
+    "function_start": "12",
+    "function_end": "15"
+  },
+  "fingerprint": "a91bccc5f9266fef373bdc81524bfb2473cc35435fe73fbf2a62b09fa3df1a9e",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/ssrf-user-url/raw.json",
+  "sarif_ref": "blob://eval/ssrf-user-url/scan.sarif",
+  "created_by_run": "6a2cc42b-2f3f-4d3f-9894-7147154e02c4"
+}

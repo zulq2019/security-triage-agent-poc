@@ -1,0 +1,37 @@
+{
+  "finding_id": "3e42c9fd-1523-4f55-a86f-e2c46f0b77ea",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.aspnet.missing-authorize",
+  "issue_type": "unsafe_code",
+  "title": "Missing authorization on DeleteUser()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-862"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Controllers/AdminController.cs",
+  "line_start": 18,
+  "line_end": 18,
+  "message": "Missing authorization on DeleteUser()",
+  "attributes": {
+    "enclosing_symbol": "DeleteUser",
+    "function_start": "18",
+    "function_end": "21"
+  },
+  "fingerprint": "d5ba0d78595279c305cc058c776a3fff6f0b3d27d4ff77d847c6b7a5ee4ac457",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/missing-authorize/raw.json",
+  "sarif_ref": "blob://eval/missing-authorize/scan.sarif",
+  "created_by_run": "4d6d99d3-c439-45e4-8552-d99338472bff"
+}

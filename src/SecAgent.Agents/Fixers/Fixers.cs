@@ -1,8 +1,5 @@
 using System.Text.Json;
-using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using SecAgent.Agents.Llm;
-using SecAgent.Agents.Scanners;
 using SecAgent.Core;
 
 namespace SecAgent.Agents.Fixers;
@@ -24,16 +21,15 @@ public sealed class LibraryFixer(AgentServices s) : IFixer
     public async Task<FixOutcome> ApplyAsync(FixContext c)
     {
         var f = c.Findings[0];
-        var pkg = f.Attributes.GetValueOrDefault("package") ?? f.ComponentName!.Split('/').Last();
-        var minSafe = c.Findings.Select(x => x.FixedVersion).Where(v => v != null).OrderByDescending(v => System.Version.Parse(v!)).FirstOrDefault()
-                      ?? throw new InvalidOperationException("no fixed version known");
+        var pkg = FixEdits.PackageName(f);
+        var minSafe = FixEdits.MinimumSafeVersion(c.Findings);
         var resolved = await s.Tools.CallAsync(Id, "nuget.resolve", new() { ["package"] = pkg, ["minVersion"] = minSafe }, c.Feed, c.EntryId, $"{pkg} ≥ {minSafe}", c.Ct);
         var target = resolved.GetProperty("lowest_safe").GetString() ?? minSafe;
         var csproj = await s.Tools.RunAsync(Id, "fs.read", $"find PackageReference {pkg}", c.Feed, c.EntryId, () => Task.FromResult(
-            Directory.GetFiles(c.Worktree, "*.csproj", SearchOption.AllDirectories).First(p => File.ReadAllText(p).Contains($"Include=\"{pkg}\""))), c.Ct);
+            FixEdits.FindManifest(c.Worktree, pkg)), c.Ct);
         var rel = Path.GetRelativePath(c.Worktree, csproj);
         var text = await File.ReadAllTextAsync(csproj, c.Ct);
-        var line = text.Split('\n').First(l => l.Contains($"Include=\"{pkg}\"")).Trim();
+        var line = FixEdits.ManifestLine(text, pkg);
         var lockRel = Path.Combine(Path.GetDirectoryName(rel)!, "packages.lock.json");
 
         var call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, null, f.FixGroupKey, [
@@ -44,8 +40,7 @@ public sealed class LibraryFixer(AgentServices s) : IFixer
 
         await s.Tools.RunAsync(Id, "fs.write", $"{rel} ({pkg} {f.ComponentVersion} → {target})", c.Feed, c.EntryId, async () =>
         {
-            var updated = Regex.Replace(text, $"(Include=\"{Regex.Escape(pkg)}\"\\s+Version=\")[^\"]+(\")", $"${{1}}{target}${{2}}");
-            await File.WriteAllTextAsync(csproj, updated, c.Ct);
+            await File.WriteAllTextAsync(csproj, FixEdits.BumpPackageVersion(text, pkg, target), c.Ct);
             return true;
         }, c.Ct);
         var restore = await s.Tools.RunAsync(Id, "dotnet.restore", $"--force-evaluate {Path.GetDirectoryName(rel)}", c.Feed, c.EntryId,
@@ -64,7 +59,7 @@ public sealed class SecretsFixer(AgentServices s) : IFixer
 {
     public string Id => "secrets"; public string Version => "secrets-fixer@0.1.0"; public string AgentName => "secrets";
     public string[] IssueTypes => [Core.IssueTypes.Secret];
-    const string VaultName = "kv-sample-orders-dev";
+    public const string VaultName = "kv-sample-orders-dev";
 
     public async Task<FixOutcome> ApplyAsync(FixContext c)
     {
@@ -72,17 +67,8 @@ public sealed class SecretsFixer(AgentServices s) : IFixer
         var path = Path.Combine(c.Worktree, f.FilePath!);
         var text = await File.ReadAllTextAsync(path, c.Ct);
         // Locate the leaked literal by HMAC (the value itself is never stored anywhere).
-        string? configPath = null, literal = null;
-        if (path.EndsWith(".json"))
-        {
-            void Walk(JsonNode? n, string p)
-            {
-                if (n is JsonObject o) foreach (var kv in o) Walk(kv.Value, p.Length == 0 ? kv.Key : p + ":" + kv.Key);
-                else if (n is JsonValue v && v.TryGetValue<string>(out var str) && Hashing.Hmac(str) == f.SecretHash) { configPath = p; literal = str; }
-            }
-            Walk(JsonNode.Parse(text), "");
-        }
-        if (literal == null) throw new InvalidOperationException("could not locate the secret literal by HMAC");
+        var located = path.EndsWith(".json") ? FixEdits.LocateJsonSecret(text, f.SecretHash) : null;
+        if (located is not var (configPath, literal)) throw new InvalidOperationException("could not locate the secret literal by HMAC");
         s.Masker.Register(literal);
 
         var call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, f.FindingId, null, [
@@ -91,13 +77,12 @@ public sealed class SecretsFixer(AgentServices s) : IFixer
             new("rule_pack", $"rule-packs/secret@{s.Cfg.RulePacks["secret"].Version}", s.Cfg.RulePacks["secret"].Guidance),
         ], new CallSpec("fix", "fix-secrets-output", f.SeverityEffective ?? f.SeverityScanner, c.AttemptNo), c.Ct);
 
-        var name = FixUtil.Str(call.Json, "secret_name");
-        if (!Regex.IsMatch(name, "^[0-9a-zA-Z-]{1,127}$")) name = Regex.Replace(configPath!.Replace(":", "-"), "([a-z])([A-Z])", "$1-$2").ToLowerInvariant();
+        var name = FixEdits.KeyVaultSecretName(FixUtil.Str(call.Json, "secret_name"), configPath);
         var kvRef = (await s.Tools.CallAsync(Id, "keyvault.reference", new() { ["secretName"] = name, ["vaultName"] = VaultName }, c.Feed, c.EntryId,
             $"{VaultName}/{name} · value masked", c.Ct)).GetProperty("reference").GetString()!;
         await s.Tools.RunAsync(Id, "fs.write", $"{f.FilePath} ({configPath} → Key Vault reference)", c.Feed, c.EntryId, async () =>
         {
-            await File.WriteAllTextAsync(path, text.Replace("\"" + literal + "\"", "\"" + kvRef + "\""), c.Ct);
+            await File.WriteAllTextAsync(path, FixEdits.ReplaceSecretLiteral(text, literal, kvRef), c.Ct);
             return true;
         }, c.Ct);
         var rotation = FixUtil.Str(call.Json, "rotation_note");
@@ -109,7 +94,7 @@ public sealed class SecretsFixer(AgentServices s) : IFixer
         }, c.Feed, c.EntryId, "owner team · rotation required", c.Ct);
         return FixUtil.Done($"Key Vault reference for {configPath}; rotation task raised", call, new()
         {
-            ["config_path"] = configPath!, ["secret_name"] = name, ["vault"] = VaultName, ["reference"] = kvRef, ["rotation_note"] = rotation,
+            ["config_path"] = configPath, ["secret_name"] = name, ["vault"] = VaultName, ["reference"] = kvRef, ["rotation_note"] = rotation,
             ["reviewer_note"] = FixUtil.Str(call.Json, "reviewer_note"), ["rotation_task"] = task.GetProperty("task_id").ToString(),
         });
     }
@@ -126,20 +111,17 @@ public sealed class UnsafeCodeFixer(AgentServices s) : IFixer
         var f = c.Findings[0];
         var path = Path.Combine(c.Worktree, f.FilePath!);
         var lines = await File.ReadAllLinesAsync(path, c.Ct);
-        var (symbol, start, end) = CodeNav.EnclosingMethod(lines, f.LineStart ?? 1);
-        var method = string.Join('\n', lines[(start - 1)..end]);
-        var className = Regex.Match(string.Join('\n', lines), @"class\s+(\w+)").Groups[1].Value;
-        var ns = Regex.Match(string.Join('\n', lines), @"namespace\s+([\w\.]+)").Groups[1].Value;
-        var usings = lines.Where(l => l.StartsWith("using ")).ToList();
+        var site = FixEdits.FindMethod(lines, f.LineStart ?? 1);
+        var (symbol, start, end, className, ns, usings) = (site.Symbol, site.Start, site.End, site.ClassName, site.Namespace, site.Usings);
+        var method = site.MethodText(lines);
         // Test context (tool_output): an existing test in the same test project and helper signatures.
         var testProj = Directory.GetFiles(Path.Combine(c.Worktree, "tests"), "*.csproj", SearchOption.AllDirectories).First();
         var testDir = Path.GetDirectoryName(testProj)!;
         var existingTest = Directory.GetFiles(testDir, "*Tests.cs", SearchOption.AllDirectories).Select(File.ReadAllText).FirstOrDefault(t => t.Contains(className)) ?? "";
-        var helpers = Directory.GetFiles(Path.Combine(c.Worktree, "src"), "*.cs", SearchOption.AllDirectories)
-            .SelectMany(File.ReadAllLines).Where(l => Regex.IsMatch(l, @"^\s*public (static |sealed )?(class|record|[\w<>\?]+ \w+\()")).Select(l => l.Trim()).Distinct().Take(25);
+        var helpers = FixEdits.PublicApi(Directory.GetFiles(Path.Combine(c.Worktree, "src"), "*.cs", SearchOption.AllDirectories));
 
         var rp = s.Cfg.RulePacks["unsafe_code"];
-        var provider = rp.Providers.FirstOrDefault(kv => usings.Any(u => u.Contains(kv.Key)));
+        var provider = FixEdits.ProviderFor(rp, usings);
         var providerText = provider.Value?.Guidance ?? "Database library: see the file usings.";
         List<ComponentInput> Inputs(string? repairNote) => [
             new("finding", $"finding:{f.FindingId}", LlmStep.FindingJson(f) + $"\nclass: {className}  method: {symbol}  namespace: {ns}"),
@@ -153,7 +135,7 @@ public sealed class UnsafeCodeFixer(AgentServices s) : IFixer
         var spec = new CallSpec("fix", "fix-unsafe-code-output", f.SeverityEffective ?? f.SeverityScanner, c.AttemptNo);
         var call = await LlmStep.RunAsync(s, c.Run, Id, AgentName, c.EntryId, f.FindingId, null, Inputs(null), spec, c.Ct);
         // Deterministic pre-build check (rules-as-code): types from another database provider cannot compile here.
-        string? Forbidden(LlmCall x) => provider.Value?.Forbid.FirstOrDefault(t => (FixUtil.Str(x.Json, "method_code") + FixUtil.Str(x.Json, "test_code")).Contains(t));
+        string? Forbidden(LlmCall x) => FixEdits.ForbiddenToken(provider.Value, FixUtil.Str(x.Json, "method_code"), FixUtil.Str(x.Json, "test_code"));
         if (Forbidden(call) is { } bad)
         {
             await s.Tools.RunAsync(Id, "code.snippet", $"pre-build check: '{bad}' is not in {provider.Key} → one repair call", c.Feed, c.EntryId, () => Task.FromResult(false), c.Ct, _ => false);
@@ -161,27 +143,20 @@ public sealed class UnsafeCodeFixer(AgentServices s) : IFixer
                 Inputs($"it used '{bad}', which does not exist in {provider.Key}. {providerText}"), spec, c.Ct);
         }
 
-        var newMethod = string.Join('\n', FixUtil.Str(call.Json, "method_code").Replace("\r", "").Split('\n').Where(l => !l.Contains("secagent:")));
+        var updated = FixEdits.ReplaceMethod(lines, site, FixUtil.Str(call.Json, "method_code"));
         var testCode = FixUtil.Str(call.Json, "test_code").Replace("\r", "");
-        if (!newMethod.Contains(symbol)) throw new InvalidOperationException($"model output does not define {symbol}");
-        var indent = lines[start - 1][..(lines[start - 1].Length - lines[start - 1].TrimStart().Length)];
-        var reindented = Reindent(newMethod, indent);
         var rel = f.FilePath!;
         await s.Tools.RunAsync(Id, "fs.write", $"{rel} ({symbol}: lines {start}-{end} replaced)", c.Feed, c.EntryId, async () =>
         {
-            var updated = lines[..(start - 1)].Concat(reindented.Split('\n')).Concat(lines[end..]);
-            await File.WriteAllTextAsync(path, string.Join('\n', updated) + "\n", c.Ct);
+            await File.WriteAllTextAsync(path, updated, c.Ct);
             return true;
         }, c.Ct);
-        var testUsings = Regex.Matches(existingTest, @"^using [^;]+;", RegexOptions.Multiline).Select(m => m.Value).Append("using Xunit;").Distinct();
-        var testNs = Regex.Match(existingTest, @"namespace\s+([\w\.]+)").Groups[1].Value;
-        var testFile = Path.Combine(testDir, "Security", $"{className}{symbol}InjectionTests.cs");
+        var testFile = FixEdits.TestFilePath(testDir, site);
         Directory.CreateDirectory(Path.GetDirectoryName(testFile)!);
         var testRel = Path.GetRelativePath(c.Worktree, testFile);
         await s.Tools.RunAsync(Id, "fs.write", $"{testRel} (new test)", c.Feed, c.EntryId, async () =>
         {
-            var body = $"{string.Join('\n', testUsings)}\n\nnamespace {(testNs.Length > 0 ? testNs : "Tests")};\n\n// Added by Security Triage & Fix Agent (unsafe-code-fixer): regression test for {f.CweIds.FirstOrDefault()} in {className}.{symbol}\npublic class {className}{symbol}InjectionTests\n{{\n{Reindent(testCode, "    ")}\n}}\n";
-            await File.WriteAllTextAsync(testFile, body, c.Ct);
+            await File.WriteAllTextAsync(testFile, FixEdits.ComposeTestFile(existingTest, site, f.CweIds.FirstOrDefault(), testCode), c.Ct);
             return true;
         }, c.Ct);
         return FixUtil.Done($"Parameterised {className}.{symbol}; added {Path.GetFileName(testFile)}", call, new()
@@ -190,13 +165,7 @@ public sealed class UnsafeCodeFixer(AgentServices s) : IFixer
         });
     }
 
-    static string Trunc(string s, int n) => s.Length <= n ? s : s[..n] + "\n…(truncated)";
-    static string Reindent(string code, string indent)
-    {
-        var ls = code.Trim('\n').Split('\n');
-        var min = ls.Where(l => l.Trim().Length > 0).Select(l => l.Length - l.TrimStart().Length).DefaultIfEmpty(0).Min();
-        return string.Join('\n', ls.Select(l => l.Trim().Length == 0 ? "" : indent + l[Math.Min(min, l.Length - l.TrimStart().Length)..]));
-    }
+    static string Trunc(string s, int n) => FixEdits.Truncate(s, n);
 }
 
 /// <summary>Binary / licence fixer: removes committed binaries (+ ignore rule); for licence clashes proposes alternatives and hands the decision to a human.</summary>
@@ -223,13 +192,12 @@ public sealed class BinaryLicenceFixer(AgentServices s) : IFixer
             if (r.ExitCode != 0) throw new InvalidOperationException(r.StdErr);
             return true;
         }, c.Ct);
-        var pattern = $"{Path.GetDirectoryName(rel)!.Replace('\\', '/')}/*{Path.GetExtension(rel)}".TrimStart('/');
+        var pattern = FixEdits.BinaryIgnorePattern(rel);
         await s.Tools.RunAsync(Id, "fs.write", $".gitignore (+ {pattern})", c.Feed, c.EntryId, async () =>
         {
             var gi = Path.Combine(c.Worktree, ".gitignore");
             var existing = File.Exists(gi) ? await File.ReadAllTextAsync(gi, c.Ct) : "";
-            if (!existing.Contains(pattern))
-                await File.WriteAllTextAsync(gi, existing.TrimEnd('\n') + $"\n\n# secagent: binaries come from the artefact feed (e.g. Azure Artifacts), not source control\n{pattern}\n", c.Ct);
+            if (!existing.Contains(pattern)) await File.WriteAllTextAsync(gi, FixEdits.AppendIgnoreRule(existing, pattern), c.Ct);
             return true;
         }, c.Ct);
         return FixUtil.Done($"Removed {rel}; ignore rule {pattern}", null, new()

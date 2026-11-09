@@ -1,0 +1,19 @@
+{
+  "sourcePath": "/synthetic/project/root",
+  "globalMetadata": {},
+  "componentList": [
+    {
+      "groupID": "org.synthetic",
+      "artifactID": "synthetic-yaml",
+      "version": "1.30",
+      "metadata": {
+        "policyViolationVulnerabilities": [ { "name": "CVE-2099-0301", "vulnSeverity": "HIGH", "overallScore": 8.3 } ],
+        "shortTermUpgradeGuidance": { "versionName": "1.33" },
+        "longTermUpgradeGuidance": { "versionName": "2.2" },
+        "transitiveUpgradeGuidance": [],
+        "componentViolatingPolicies": [ { "policyName": "No High or Critical Vulnerabilities" } ]
+      },
+      "declarationLocation": { "fileLocations": [ { "filePath": "build.gradle.kts", "lineLocations": [ { "lineNumber": 12 } ] } ] }
+    }
+  ]
+}

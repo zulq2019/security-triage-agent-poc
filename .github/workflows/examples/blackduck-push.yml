@@ -1,0 +1,126 @@
+# EXAMPLE ONLY: not active. GitHub only runs workflows directly in .github/workflows/, never in sub-folders, so this file does nothing here.
+# Copy it into the application repository's .github/workflows/ and adapt it (docs/intake.md, "Wiring your real workflow").
+#
+# Flow: PR opened/updated → your existing Black Duck step → this job signs the result and pushes it to the Security Triage Agent.
+# Nothing polls Black Duck: the agent only reacts to what this workflow pushes.
+#
+# Secrets (repo or org level):
+#   INTAKE_URL          base URL of the agent, e.g. https://secagent.example.internal   (the job appends /api/intake/<format>)
+#   INTAKE_HMAC_SECRET  shared secret; the same value is in the agent's SECAGENT_INTAKE_HMAC_SECRET (Key Vault in Azure)
+#
+# Black Duck note (public Bridge CLI docs): SARIF generation is NOT supported in a PR context, so on pull requests send the
+# rapid-scan JSON (Detect writes <project>_<version>_BlackDuck_DeveloperMode_Result.json; keep it with detect.cleanup=false).
+# SARIF works for branch scans (see blackduck-nightly-main.yml).
+name: blackduck-push (example)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  # id-token: write    # only for the OIDC options (Blob upload with azure/login, or a future OIDC-authenticated intake)
+
+jobs:
+  blackduck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------------------------------------------------------
+      # PLACEHOLDER: keep your EXISTING Black Duck step here, unchanged. Two things to make sure of:
+      #   1. it runs a RAPID scan on PRs, and
+      #   2. it leaves the result file on disk (Detect: --detect.cleanup=false; Bridge: include_diagnostics or a fixed output dir).
+      # Example with the Black Duck Security Scan action (check inputs against the version you use):
+      #
+      # - name: Black Duck SCA (rapid)
+      #   uses: blackduck-inc/black-duck-security-scan@v2
+      #   with:
+      #     blackducksca_url: ${{ vars.BLACKDUCK_URL }}
+      #     blackducksca_token: ${{ secrets.BLACKDUCK_TOKEN }}
+      #     blackducksca_scan_full: false                # rapid scan on PRs
+      #     detect_args: '--detect.cleanup=false --detect.output.path=${{ runner.temp }}/detect'
+      #     include_diagnostics: true
+      # ---------------------------------------------------------------------------------------------------------------
+
+      - name: Locate the Black Duck result
+        id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Rapid-scan JSON first (PR context), else a SARIF report. Adjust the search roots to your step's output folders.
+          f=$(find "${RUNNER_TEMP}" "${GITHUB_WORKSPACE}/.bridge" "${GITHUB_WORKSPACE}/.blackduck" -type f \
+                \( -name '*_BlackDuck_DeveloperMode_Result*.json' -o -name '*.sarif.json' -o -name '*.sarif' \) 2>/dev/null | head -n 1 || true)
+          if [ -z "${f}" ]; then echo "::error::no Black Duck result file found"; exit 1; fi
+          case "${f}" in *DeveloperMode_Result*) fmt=blackduck-rapid ;; *) fmt=sarif ;; esac
+          echo "file=${f}" >> "$GITHUB_OUTPUT"
+          echo "format=${fmt}" >> "$GITHUB_OUTPUT"
+
+      # Signs (HMAC-SHA256 over timestamp + metadata + sha256(body), scheme secagent-intake-v1) and POSTs the file.
+      # All inputs come through env: the script has no ${{ }} expressions, so it is safe against injection and copy-pasteable.
+      - name: Sign and push to the Security Triage Agent
+        id: push
+        shell: bash
+        env:
+          INTAKE_URL: ${{ secrets.INTAKE_URL }}
+          INTAKE_HMAC_SECRET: ${{ secrets.INTAKE_HMAC_SECRET }}
+          RESULT_FILE: ${{ steps.result.outputs.file }}
+          RESULT_FORMAT: ${{ steps.result.outputs.format }}
+          SA_REPO: ${{ github.repository }}
+          SA_PR: ${{ github.event.pull_request.number }}
+          SA_REF: ${{ github.head_ref || github.ref_name }}
+          SA_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SA_SCANNER: blackduck
+          SA_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          : "${INTAKE_URL:?INTAKE_URL secret is not set}" "${INTAKE_HMAC_SECRET:?INTAKE_HMAC_SECRET secret is not set}"
+          ts=$(date +%s)
+          body_sha=$(sha256sum "${RESULT_FILE}" | cut -d' ' -f1)
+          # The secret is read from the environment inside python, never passed on a command line.
+          sig=$(TS="${ts}" BODY_SHA="${body_sha}" python3 -c '
+          import hashlib, hmac, os
+          e = os.environ
+          parts = ["secagent-intake-v1", e["TS"], e["RESULT_FORMAT"], e["SA_REPO"], e.get("SA_PR", ""), e.get("SA_REF", ""),
+                   e["SA_SHA"], e["SA_SCANNER"], e["SA_RUN_ID"], e["BODY_SHA"]]
+          print(hmac.new(e["INTAKE_HMAC_SECRET"].encode(), "\n".join(parts).encode(), hashlib.sha256).hexdigest())')
+          status=$(curl -sS -o "${RUNNER_TEMP:-/tmp}/intake-response.json" -w '%{http_code}' --max-time 120 --retry 3 --retry-all-errors \
+            -X POST "${INTAKE_URL%/}/api/intake/${RESULT_FORMAT}" \
+            -H 'Content-Type: application/json' \
+            -H "X-SecAgent-Timestamp: ${ts}" \
+            -H "X-SecAgent-Signature-256: sha256=${sig}" \
+            -H "X-SecAgent-Repo: ${SA_REPO}" \
+            -H "X-SecAgent-Pr: ${SA_PR:-}" \
+            -H "X-SecAgent-Ref: ${SA_REF:-}" \
+            -H "X-SecAgent-Head-Sha: ${SA_SHA}" \
+            -H "X-SecAgent-Scanner: ${SA_SCANNER}" \
+            -H "X-SecAgent-Run-Id: ${SA_RUN_ID}" \
+            --data-binary "@${RESULT_FILE}")
+          cat "${RUNNER_TEMP:-/tmp}/intake-response.json"; echo
+          # 202 accepted, 200 duplicate (already received): both fine. Anything else fails the step.
+          case "${status}" in 200|202) echo "intake: HTTP ${status}" ;; *) echo "::error::intake returned HTTP ${status}"; exit 1 ;; esac
+
+      # ---------------------------------------------------------------------------------------------------------------
+      # ALTERNATIVE: upload to Blob instead of the webhook (Blob created → Event Grid → agent). No shared secret: the job logs in
+      # with GitHub OIDC (needs permissions: id-token: write, a federated credential on an Entra app, and
+      # "Storage Blob Data Contributor" on the intake container only). Metadata travels as blob metadata.
+      #
+      # - uses: azure/login@v2
+      #   with:
+      #     client-id: ${{ vars.AZURE_CLIENT_ID }}
+      #     tenant-id: ${{ vars.AZURE_TENANT_ID }}
+      #     subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # - name: Upload result to the intake container
+      #   shell: bash
+      #   env:
+      #     RESULT_FILE: ${{ steps.result.outputs.file }}
+      #     RESULT_FORMAT: ${{ steps.result.outputs.format }}
+      #     SA_PR: ${{ github.event.pull_request.number }}
+      #     SA_REF: ${{ github.head_ref }}
+      #     SA_SHA: ${{ github.event.pull_request.head.sha }}
+      #     SA_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      #   run: |
+      #     az storage blob upload --auth-mode login --account-name "${{ vars.INTAKE_STORAGE_ACCOUNT }}" --container-name intake \
+      #       --name "${GITHUB_REPOSITORY}/${SA_SHA}/blackduck-${SA_RUN_ID}.${RESULT_FORMAT}.json" --file "${RESULT_FILE}" \
+      #       --metadata repo="${GITHUB_REPOSITORY}" pr="${SA_PR}" ref="${SA_REF}" head_sha="${SA_SHA}" scanner=blackduck run_id="${SA_RUN_ID}" format="${RESULT_FORMAT}"
+      # ---------------------------------------------------------------------------------------------------------------

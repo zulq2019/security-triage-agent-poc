@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- In-memory, deterministic fakes for every connector kind (provider id "fake"), with recorded interactions for assertions and
+       fault injection for resilience tests. Lets a full pipeline run execute with no GitHub, Jira, Black Duck, model or Teams access.
+       Synthetic data only. Registered with builder.AddFakeConnectors(). -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+  </ItemGroup>
+</Project>

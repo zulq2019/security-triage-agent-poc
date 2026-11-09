@@ -1,0 +1,23 @@
+{
+  "case_id": "nuget-major-upgrade-breaking",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "fdbd58955bacfec704ee817054fcc3012d50d473f105a562f7d75f61987e78a6",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Direct dependency with a known advisory; a fixed version (9.0.0) exists. It is a major upgrade, so the fixer must verify compatibility.",
+        "confidence": 0.85
+      }
+    },
+    "fix": {
+      "prompt_sha256": "e55e8a80f3384f91333f398446d887ca73666556e98a47f1d0960cbce9997b00",
+      "response": {
+        "breaking_change_risk": "high",
+        "reviewer_note": "AutoMapper 9.0 removed the static Mapper.Initialize/Mapper.Map API used in OrderMapping. Expect code changes to an injected IMapper; the build will show whether the bump alone is enough."
+      }
+    }
+  }
+}

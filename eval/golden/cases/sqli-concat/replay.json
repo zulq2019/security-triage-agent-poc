@@ -1,0 +1,24 @@
+{
+  "case_id": "sqli-concat",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "857f9c63d58a55f97581536a0aa80add429a0f33504b0ea83897e830e5bc7570",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Caller-supplied customer value is concatenated into SQL text: CWE-89. Parameterise.",
+        "confidence": 0.92
+      }
+    },
+    "fix": {
+      "prompt_sha256": "0a8fc6379abcf317d2db85369df5ee55ff624ef9a8884d43271a1231e9eba7af",
+      "response": {
+        "method_code": "public List<string> FindByCustomer(string customer)\n{\n    using var conn = new SqliteConnection(_connectionString);\n    conn.Open();\n    using var cmd = conn.CreateCommand();\n    cmd.CommandText = \"SELECT Item FROM Orders WHERE Customer = $customer\";\n    cmd.Parameters.AddWithValue(\"$customer\", customer);\n    var items = new List<string>();\n    using var reader = cmd.ExecuteReader();\n    while (reader.Read()) items.Add(reader.GetString(0));\n    return items;\n}\n",
+        "test_code": "[Fact]\npublic void FindByCustomer_returns_no_rows_for_an_injection_payload()\n{\n    var repo = OrdersRepositoryTests.NewRepo();\n    Assert.Empty(repo.FindByCustomer(\"' OR '1'='1\"));\n}\n",
+        "explanation": "Bind customer as a SQLite parameter ($customer) instead of concatenating it."
+      }
+    }
+  }
+}

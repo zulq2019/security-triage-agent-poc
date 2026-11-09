@@ -1,0 +1,24 @@
+{
+  "case_id": "weak-crypto-md5",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "52272017fae261e927d848372617d51ed4df1e0565344c7ac6d379ae022a82cf",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "medium",
+        "reason": "MD5 is collision-prone and unsuitable for integrity checks (CWE-327). Replace with SHA-256.",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "c39c3b8073fc0b2b8aee71cee49ca82404e8bb258572c9efe8c4e9103af19f42",
+      "response": {
+        "method_code": "public string Hash(string content)\n{\n    var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(content));\n    return Convert.ToHexString(bytes);\n}\n",
+        "test_code": "[Fact]\npublic void Hash_uses_a_256_bit_digest()\n{\n    Assert.Equal(64, new DocumentHasher().Hash(\"invoice-42\").Length);\n}\n",
+        "explanation": "Use SHA-256 instead of MD5; output stays an upper-case hex string."
+      }
+    }
+  }
+}

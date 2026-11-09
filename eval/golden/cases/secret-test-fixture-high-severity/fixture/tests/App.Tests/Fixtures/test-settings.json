@@ -1,0 +1,6 @@
+{
+  "Payments": {
+    "Provider": "stripe-sandbox",
+    "ApiKey": "{{secret:TEST_KEY}}"
+  }
+}

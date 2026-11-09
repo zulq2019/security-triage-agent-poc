@@ -1,0 +1,16 @@
+{
+  "case_id": "secret-test-fixture-high-severity",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "f5f4eca8d595c57de6365c2dfe12141bbc2c37ae9664d56dcbf0e0be502ca51c",
+      "response": {
+        "decision": "suppress",
+        "severity_effective": "high",
+        "reason": "Sandbox-prefixed key in a test fixture; rule test-fixture-test-key matches the path and prefix, but the finding is high severity.",
+        "confidence": 0.85
+      }
+    }
+  }
+}

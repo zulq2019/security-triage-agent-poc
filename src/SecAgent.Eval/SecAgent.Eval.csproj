@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Evaluation harness: runs the golden cases (eval/golden) through triage -> route -> fix -> verify and scores them with
+       deterministic checkers. Default mode is replay (recorded model responses: deterministic, free, CI-safe); live/record
+       call the configured model provider. Composition root: services.AddSecAgentEval(...). See docs/evaluation.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>secagent-eval</AssemblyName>
+    <RootNamespace>SecAgent.Eval</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Agents/SecAgent.Agents.csproj" />
+    <!-- LiveModelClient calls the OpenAI-compatible endpoint directly (no SQL-persisting ModelGateway); the pipeline now gets this SDK
+         only through SecAgent.Connectors.OpenAI, so the harness references it itself. -->
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.23.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.9" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SecAgent.Eval.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,24 @@
+{
+  "case_id": "xss-razor-html-raw",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "6a6adb9d203fa6c5cba97aa42d42fec850a8622214c6df555b27eae442c95afb",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "User-controlled bio rendered with Html.Raw bypasses Razor encoding: stored XSS (CWE-79).",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "c8b47a2cc27db3ce7c405781cbbc82a6a291d8e0a820e56cef39168476fea453",
+      "response": {
+        "method_code": "<section class=\"bio\">\n    @Model.Bio\n</section>\n",
+        "test_code": "[Fact]\npublic void Bio_is_rendered_encoded()\n{\n    Assert.DoesNotContain(\"Html.Raw\", File.ReadAllText(\"Views/Profile/Show.cshtml\"));\n}\n",
+        "explanation": "Render the bio through Razor's default HTML encoding instead of Html.Raw."
+      }
+    }
+  }
+}

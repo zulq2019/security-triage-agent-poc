@@ -1,0 +1,49 @@
+{
+  "id": "missing-authorize",
+  "title": "Missing authorization on a state-changing admin endpoint",
+  "category": "missing_authorization",
+  "description": "DELETE api/admin/users/{id} has no [Authorize] (the controller has none either), so anyone can call it. Expected: require the Admin role on the endpoint; the anonymous health check stays anonymous.",
+  "tags": [
+    "positive",
+    "sast"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "unsafe_code",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 2
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Controllers/AdminController.cs",
+      "regex": "\\[Authorize\\b"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/Controllers/AdminController.cs",
+        "tests/App.Tests/Security/*.cs"
+      ]
+    },
+    {
+      "type": "pattern_present",
+      "file": "src/App/Controllers/AdminController.cs",
+      "regex": "\\[AllowAnonymous\\]"
+    }
+  ],
+  "target": {
+    "rule": "endpoint-without-authorize",
+    "file": "src/App/Controllers/AdminController.cs"
+  }
+}

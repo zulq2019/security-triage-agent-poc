@@ -1,0 +1,47 @@
+[
+  {
+    "componentName": "Synthetic.Json",
+    "versionName": "12.0.1",
+    "componentIdentifier": "nuget:Synthetic.Json/12.0.1",
+    "externalId": "nuget:Synthetic.Json/12.0.1",
+    "violatingPolicies": [ { "policyName": "No High or Critical Vulnerabilities", "policySeverity": "MAJOR", "policyStatus": "IN_VIOLATION" } ],
+    "policyViolationVulnerabilities": [
+      { "name": "BDSA-2099-0101", "vulnSeverity": "HIGH", "overallScore": 7.5, "cweIds": [ "CWE-400" ], "description": "Synthetic denial of service through deeply nested input.",
+        "violatingPolicies": [ { "policyName": "No High or Critical Vulnerabilities", "policySeverity": "MAJOR" } ] },
+      { "name": "CVE-2099-0102", "vulnSeverity": "CRITICAL", "overallScore": 9.1, "cweIds": [ "CWE-502" ], "description": "Synthetic unsafe deserialisation.",
+        "violatingPolicies": [ { "policyName": "No High or Critical Vulnerabilities", "policySeverity": "MAJOR" } ] }
+    ],
+    "policyViolationLicenses": [],
+    "shortTermUpgradeGuidance": { "versionName": "12.0.4", "externalId": "nuget:Synthetic.Json/12.0.4" },
+    "longTermUpgradeGuidance": { "versionName": "13.0.1", "externalId": "nuget:Synthetic.Json/13.0.1" },
+    "transitiveUpgradeGuidance": [],
+    "dependencyTrees": [ [ "Synthetic.Json/12.0.1" ] ]
+  },
+  {
+    "componentName": "synthetic-left-pad",
+    "versionName": "1.0.0",
+    "componentIdentifier": "npmjs:synthetic-left-pad/1.0.0",
+    "violatingPolicies": [ { "policyName": "No GPL", "policySeverity": "BLOCKER" } ],
+    "policyViolationVulnerabilities": [],
+    "policyViolationLicenses": [
+      { "name": "GPL-3.0-only", "licenseFamilyName": "Reciprocal", "violatingPolicies": [ { "policyName": "No GPL", "policySeverity": "BLOCKER" } ] }
+    ],
+    "transitiveUpgradeGuidance": [ { "externalId": "npmjs:synthetic-ui-kit/2.0.0" } ],
+    "dependencyTrees": [ [ "synthetic-ui-kit/2.0.0", "synthetic-left-pad/1.0.0" ] ]
+  },
+  {
+    "componentName": "Synthetic Commons",
+    "versionName": "0.9",
+    "componentIdentifier": "maven:org.synthetic:commons:0.9",
+    "violatingPolicies": [ { "policyName": "Unknown component version", "policySeverity": "MINOR" } ],
+    "policyViolationVulnerabilities": [],
+    "policyViolationLicenses": []
+  },
+  {
+    "componentName": "Synthetic Broken",
+    "versionName": "1.0",
+    "componentIdentifier": "pypi:synthetic-broken/1.0",
+    "errorMessage": "synthetic: component could not be evaluated",
+    "policyViolationVulnerabilities": [ { "name": "BDSA-2099-0199", "overallScore": 4.2 } ]
+  }
+]

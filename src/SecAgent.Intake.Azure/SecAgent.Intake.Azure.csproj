@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Azure adapters for the intake ports (Blob raw store + blob reader, Service Bus run queue). Depends on the ports
+       (SecAgent.Abstractions) only, not on the intake implementation. Selected with Intake:Adapters:* = azure-blob / azure-servicebus
+       after services.AddSecAgentIntakeAzure(configuration). Compile-tested here; not exercised against a live Azure subscription. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Abstractions/SecAgent.Abstractions.csproj" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.30.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.12" />
+  </ItemGroup>
+</Project>

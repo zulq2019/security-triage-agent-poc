@@ -1,0 +1,37 @@
+{
+  "finding_id": "b63fdbd5-006c-4349-93e9-9636aafc9e4f",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.crypto.insecure-random",
+  "issue_type": "unsafe_code",
+  "title": "Insecure randomness in NewToken()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-338"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Security/ResetTokenGenerator.cs",
+  "line_start": 7,
+  "line_end": 7,
+  "message": "Insecure randomness in NewToken()",
+  "attributes": {
+    "enclosing_symbol": "NewToken",
+    "function_start": "5",
+    "function_end": "11"
+  },
+  "fingerprint": "de1633e8d5c2e441267ae2c8da1645acab4978323f05182b9a3681b93df1db97",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/weak-random-token/raw.json",
+  "sarif_ref": "blob://eval/weak-random-token/scan.sarif",
+  "created_by_run": "b2a0df8e-d971-4761-b116-7cabb903e567"
+}

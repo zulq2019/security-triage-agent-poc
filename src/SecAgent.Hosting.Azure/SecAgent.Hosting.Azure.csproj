@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Azure Service Bus transport for the worker host's queue ports (Agent:Transport = servicebus, which the Bicep sets as SECAGENT_QUEUE).
+       Entra ID only (the app's managed identity via DefaultAzureCredential, AZURE_CLIENT_ID): no connection strings. Depends on
+       SecAgent.Hosting (ports) only. Compile-tested here; not exercised against a live namespace (no subscription in the POC). -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Hosting/SecAgent.Hosting.csproj" />
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Azure.Messaging.ServiceBus" Version="7.21.0" />
+  </ItemGroup>
+</Project>
