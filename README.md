@@ -8,7 +8,7 @@ Agents open PRs only. They have no merge rights, and no code path can merge. The
 
 - Runtime: **Microsoft Agent Framework 1.23.0** (`Microsoft.Agents.AI`, `.Workflows`, `.OpenAI`; GA) on .NET 10
 - Models: local Ollama (`qwen2.5:3b` small tier, `qwen2.5-coder:7b` strong tier, `qwen2.5-coder:3b` fallback) behind a thin model gateway. Moving to Azure OpenAI/APIM is a config change.
-- Scanners: gitleaks 8.30.1, trivy 0.75.0 (vuln + licence), semgrep 1.179.0 (custom C# SQLi rule), binary check
+- Scanners: gitleaks 8.30.1, trivy 0.76.2 (vuln + licence), semgrep 1.179.0 (custom C# SQLi rule), binary check
 - Store: SQL Server 2022 (local), standing in for Azure SQL. Evidence goes to a write-once local blob folder, standing in for Azure Blob.
 - Live dashboard: ASP.NET + SSE (`secagent serve`)
 

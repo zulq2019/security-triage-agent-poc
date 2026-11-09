@@ -11,11 +11,12 @@
 # Every image runs as the non-root `app` user (UID 1654) and works with a read-only root file system: state lives in /data (a
 # volume), scratch in /tmp (tmpfs). Base images are pinned by digest; bump tag + digest together.
 
-ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317
-ARG ASPNET_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0-noble@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
-ARG CHISELED_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra@sha256:00e0ad6a7ef8c0c1391b87f05c7ac757a15740455688f2bfcd146a3f4b987efd
-# Go toolchain only for rebuilding gitleaks (see the gitleaks stage). golang 1.26.8.
-ARG GO_IMAGE=golang:1.26-bookworm@sha256:a688600ca24f8a4d3ca77f95b0dd40704a9fc787c826660eb7ba0b641b8b175d
+ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0.403-noble@sha256:212fe4cb74627d5adf9817a4088906ae3edff1bd853bb27565d4b46731efe61e
+ARG ASPNET_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0.14-noble@sha256:1a48394b6f29d3a32c79d9edecd4abda0ecbe8776d567dbfc4590ed6979c740c
+ARG CHISELED_IMAGE=mcr.microsoft.com/dotnet/aspnet:10.0.14-noble-chiseled-extra@sha256:a9298ccc39c6258ae71228479e2f3f8d2ceb6639a9927262a4b0ff7d319a0e7e
+# Go toolchains for rebuilding gitleaks (1.26.10) and gh (1.27.3). See those stages.
+ARG GO_IMAGE=golang:1.26.10-bookworm@sha256:5de7c99eb78ca5e515a4c340235d0955ec5964a5071c492c15503d7c267da473
+ARG GO127_IMAGE=golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # Build: restore (cached layer, only project files), then publish each host in its own stage so a target builds only what it needs.
@@ -69,8 +70,8 @@ RUN mkdir -p /data-template && chmod -R a+rX /content
 
 # ------------------------------------------------------------------------------------------------------------------------------------
 # gitleaks: built from the pinned, checksummed source tag with a current Go toolchain. The v8.30.1 release binary (latest release) is
-# built with Go 1.24.11 and old golang.org/x modules, and the image scan in CI fails on ~30 fixable HIGH/CRITICAL CVEs in it. Same
-# gitleaks code; only the Go standard library and x/crypto, x/text (indirect deps) move to fixed versions. Cross-compiles for TARGETARCH.
+# built with Go 1.24.11 and old golang.org/x modules, and the image scan in CI fails on fixable HIGH/CRITICAL CVEs in it. Same
+# gitleaks code; the Go standard library, x/crypto, x/text and klauspost/compress move to fixed versions. Cross-compiles for TARGETARCH.
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS gitleaks
 ARG TARGETARCH
@@ -78,6 +79,7 @@ ARG GITLEAKS_VERSION=8.30.1
 ARG GITLEAKS_SRC_SHA256=e90fb266d75837e75894c778bf594ab8e2787f12dce5a62651f21b893eaf9abb
 ARG X_CRYPTO_VERSION=v0.55.0
 ARG X_TEXT_VERSION=v0.41.0
+ARG COMPRESS_VERSION=v1.18.7
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /src
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
@@ -85,35 +87,50 @@ RUN --mount=type=cache,id=secagent-gomod,target=/go/pkg/mod \
     curl -fsSLo src.tgz "https://github.com/gitleaks/gitleaks/archive/refs/tags/v${GITLEAKS_VERSION}.tar.gz"; \
     echo "${GITLEAKS_SRC_SHA256}  src.tgz" | sha256sum -c -; \
     tar -xzf src.tgz --strip-components=1; \
-    go get "golang.org/x/crypto@${X_CRYPTO_VERSION}" "golang.org/x/text@${X_TEXT_VERSION}"; \
+    go get "golang.org/x/crypto@${X_CRYPTO_VERSION}" "golang.org/x/text@${X_TEXT_VERSION}" "github.com/klauspost/compress@${COMPRESS_VERSION}"; \
     go mod tidy; \
     GOARCH="${TARGETARCH:-amd64}" go build -ldflags "-s -w -X=github.com/zricethezav/gitleaks/v8/version.Version=v${GITLEAKS_VERSION}" -o /out/gitleaks .
 
 # ------------------------------------------------------------------------------------------------------------------------------------
-# Other tools: release binaries pinned by version AND sha256 (from each release's checksums file). No install scripts, no `latest`.
+# gh: the v2.103.3 release binary is built with Go 1.27.3 but still vendors golang.org/x/net v0.60.0 (CVE-2026-78661, fixed in
+# v0.62.0). Same CLI source; only that module moves. Cross-compiles for TARGETARCH.
+# ------------------------------------------------------------------------------------------------------------------------------------
+FROM --platform=$BUILDPLATFORM ${GO127_IMAGE} AS gh
+ARG TARGETARCH
+ARG GH_VERSION=2.103.3
+ARG GH_SRC_SHA256=bb148138a3a2fe023e57c78042fe3b42fc09171c0e8fff4cf983b227b7a2eade
+ARG X_NET_VERSION=v0.62.0
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+WORKDIR /src
+ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-trimpath
+RUN --mount=type=cache,id=secagent-gomod,target=/go/pkg/mod \
+    curl -fsSLo src.tgz "https://github.com/cli/cli/archive/refs/tags/v${GH_VERSION}.tar.gz"; \
+    echo "${GH_SRC_SHA256}  src.tgz" | sha256sum -c -; \
+    tar -xzf src.tgz --strip-components=1; \
+    go get "golang.org/x/net@${X_NET_VERSION}"; \
+    go mod tidy; \
+    GOARCH="${TARGETARCH:-amd64}" go build -ldflags "-s -w -X github.com/cli/cli/v2/internal/build.Version=v${GH_VERSION}" -o /out/gh ./cmd/gh
+
+# ------------------------------------------------------------------------------------------------------------------------------------
+# Other tools: Trivy is the release binary pinned by version AND sha256. gitleaks and gh are the rebuilt binaries above.
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM ${SDK_IMAGE} AS tools
 ARG TARGETARCH
-ARG TRIVY_VERSION=0.75.0
-ARG TRIVY_SHA256_AMD64=c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
-ARG TRIVY_SHA256_ARM64=a1ee9f6ffb7d112b64ff726a2a0717c21175c1114361391f4a132956751a13b3
-ARG GH_VERSION=2.102.0
-ARG GH_SHA256_AMD64=bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386
-ARG GH_SHA256_ARM64=7862c86c72f43df3a2d93ddde6f473285b4e2af61b494849846827e513ef6484
+ARG TRIVY_VERSION=0.76.2
+ARG TRIVY_SHA256_AMD64=bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+ARG TRIVY_SHA256_ARM64=ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 WORKDIR /tmp/tools
 COPY --from=gitleaks /out/gitleaks /opt/tools/bin/gitleaks
+COPY --from=gh /out/gh /opt/tools/bin/gh
 RUN case "${TARGETARCH:-amd64}" in \
-      amd64) TV=64bit; GA=amd64; TV_SHA=${TRIVY_SHA256_AMD64}; GH_SHA=${GH_SHA256_AMD64} ;; \
-      arm64) TV=ARM64; GA=arm64; TV_SHA=${TRIVY_SHA256_ARM64}; GH_SHA=${GH_SHA256_ARM64} ;; \
+      amd64) TV=64bit; TV_SHA=${TRIVY_SHA256_AMD64} ;; \
+      arm64) TV=ARM64; TV_SHA=${TRIVY_SHA256_ARM64} ;; \
       *) echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     curl -fsSLo trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-${TV}.tar.gz"; \
     echo "${TV_SHA}  trivy.tgz" | sha256sum -c -; \
     tar -xzf trivy.tgz -C /opt/tools/bin trivy; \
-    curl -fsSLo gh.tgz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${GA}.tar.gz"; \
-    echo "${GH_SHA}  gh.tgz" | sha256sum -c -; \
-    tar -xzf gh.tgz --strip-components=2 -C /opt/tools/bin "gh_${GH_VERSION}_linux_${GA}/bin/gh"; \
     chmod 0755 /opt/tools/bin/*; \
     /opt/tools/bin/gitleaks version; /opt/tools/bin/trivy --version; /opt/tools/bin/gh --version
 
@@ -133,7 +150,7 @@ RUN apt-get update \
 # ------------------------------------------------------------------------------------------------------------------------------------
 FROM ${ASPNET_IMAGE} AS scanner-base
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git python3 \
+ && apt-get install -y --no-install-recommends apt git python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=tools /opt/tools/bin/gitleaks /opt/tools/bin/trivy /usr/local/bin/
 COPY --from=semgrep /opt/semgrep /opt/semgrep
@@ -144,7 +161,7 @@ ENV PATH="/opt/semgrep/bin:${PATH}" \
 
 FROM ${SDK_IMAGE} AS toolchain-base
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 \
+ && apt-get install -y --no-install-recommends apt libbrotli1 python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=tools /opt/tools/bin/ /usr/local/bin/
 COPY --from=semgrep /opt/semgrep /opt/semgrep
