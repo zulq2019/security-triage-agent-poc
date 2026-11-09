@@ -1,3 +1,4 @@
+using SecAgent.Connectors;
 using Microsoft.Agents.AI.Workflows;
 using SecAgent.Agents.Llm;
 using SecAgent.Core;
@@ -12,6 +13,12 @@ public abstract class StepBase(string id, AgentServices s, RunState r) : Executo
     protected Feed Feed => R.Feed;
     protected Guid RunId => R.Run.RunId;
     protected CancellationToken Ct => R.Token;
+    /// <summary>The run tenant's source control connector (no merge capability exists on it).</summary>
+    protected ISourceControlClient Scm => S.Connectors.SourceControl.ForTenant(R.TenantId);
+
+    /// <summary>State, base and URL of a PR in the run's repository (null when it no longer exists).</summary>
+    protected async Task<PullRequestSummary?> GetSummaryAsync(int number) =>
+        await Scm.GetPullRequestAsync(R.Pr.Repo, number, Ct) is { } p ? new PullRequestSummary(p.Number, p.Url, p.State, p.Title, p.BaseRef, p.HeadRef) : null;
 
     protected async ValueTask StatusAsync(IWorkflowContext ctx, string agent, string state, string text)
     {

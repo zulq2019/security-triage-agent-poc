@@ -1,10 +1,28 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/SecAgent.Abstractions/SecAgent.Abstractions.csproj" />
     <Project Path="src/SecAgent.Agents/SecAgent.Agents.csproj" />
+    <Project Path="src/SecAgent.Connectors/SecAgent.Connectors.csproj" />
+    <Project Path="src/SecAgent.Connectors.Abstractions/SecAgent.Connectors.Abstractions.csproj" />
+    <Project Path="src/SecAgent.Connectors.BlackDuck/SecAgent.Connectors.BlackDuck.csproj" />
+    <Project Path="src/SecAgent.Connectors.Fakes/SecAgent.Connectors.Fakes.csproj" />
+    <Project Path="src/SecAgent.Connectors.GitHub/SecAgent.Connectors.GitHub.csproj" />
+    <Project Path="src/SecAgent.Connectors.Hosting/SecAgent.Connectors.Hosting.csproj" />
+    <Project Path="src/SecAgent.Connectors.Jira/SecAgent.Connectors.Jira.csproj" />
+    <Project Path="src/SecAgent.Connectors.KeyVault/SecAgent.Connectors.KeyVault.csproj" />
+    <Project Path="src/SecAgent.Connectors.OpenAI/SecAgent.Connectors.OpenAI.csproj" />
+    <Project Path="src/SecAgent.Connectors.Teams/SecAgent.Connectors.Teams.csproj" />
     <Project Path="src/SecAgent.Core/SecAgent.Core.csproj" />
     <Project Path="src/SecAgent.Dashboard/SecAgent.Dashboard.csproj" />
+    <Project Path="src/SecAgent.Eval/SecAgent.Eval.csproj" />
+    <Project Path="src/SecAgent.Intake/SecAgent.Intake.csproj" />
+    <Project Path="src/SecAgent.Hosting.Azure/SecAgent.Hosting.Azure.csproj" />
+    <Project Path="src/SecAgent.Hosting/SecAgent.Hosting.csproj" />
+    <Project Path="src/SecAgent.Intake.Azure/SecAgent.Intake.Azure.csproj" />
+    <Project Path="src/SecAgent.Worker/SecAgent.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/SecAgent.Eval.Tests/SecAgent.Eval.Tests.csproj" />
     <Project Path="tests/SecAgent.Tests/SecAgent.Tests.csproj" />
   </Folder>
 </Solution>

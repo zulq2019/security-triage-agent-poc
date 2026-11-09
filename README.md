@@ -8,11 +8,11 @@ Agents open PRs only. They have no merge rights, and no code path can merge. The
 
 - Runtime: **Microsoft Agent Framework 1.23.0** (`Microsoft.Agents.AI`, `.Workflows`, `.OpenAI`; GA) on .NET 10
 - Models: local Ollama (`qwen2.5:3b` small tier, `qwen2.5-coder:7b` strong tier, `qwen2.5-coder:3b` fallback) behind a thin model gateway. Moving to Azure OpenAI/APIM is a config change.
-- Scanners: gitleaks 8.30.1, trivy 0.75.0 (vuln + licence), semgrep 1.179.0 (custom C# SQLi rule), binary check
+- Scanners: gitleaks 8.30.1, trivy 0.76.2 (vuln + licence), semgrep 1.179.0 (custom C# SQLi rule), binary check
 - Store: SQL Server 2022 (local), standing in for Azure SQL. Evidence goes to a write-once local blob folder, standing in for Azure Blob.
 - Live dashboard: ASP.NET + SSE (`secagent serve`)
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, and [docs/PROGRESS.md](docs/PROGRESS.md) for the build log.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mapping and the guardrails, [docs/RESULTS.md](docs/RESULTS.md) for the real run results, [docs/PROGRESS.md](docs/PROGRESS.md) for the build log, [docs/intake.md](docs/intake.md) for pushing Black Duck / SARIF results from GitHub Actions into the agent, [docs/connectors.md](docs/connectors.md) for the connector layer (GitHub, Jira, Black Duck, model provider, Teams behind plug-in interfaces, with fakes; single- and multi-tenant configuration), and [docs/design-principles.md](docs/design-principles.md) for the design principles (SOLID, DI composition roots, ports & adapters).
 
 ## Model provider: a pure config switch
 
@@ -26,7 +26,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design, the Azure mappi
 | `Providers.<p>.SmallModel` / `StrongModel` | `SECAGENT_SMALL_MODEL` / `SECAGENT_STRONG_MODEL` | OpenAI defaults are **placeholders** (`gpt-6-luna` / `gpt-6.1-sol`): set them to the models on your account. For Azure, use your deployment names |
 | `Providers.<p>.ApiKeyEnv` | (the key itself) | `OPENAI_API_KEY` / `AZURE_OPENAI_API_KEY`. **The key is read only from that environment variable and is never written to a file, a log or the store** |
 
-Only the provider, endpoint and models change. The routing policy (task → tier, escalation, budgets, schema validation, kill switch) stays in `rules/gateway/models.yaml`. The provider choice is part of the hashed config snapshot that every run records. Hosted providers default to `MaxConcurrentCalls: 4`, no temperature/seed (reasoning-family models reject them), a 4096-token output reserve and a 250k-token run budget.
+This switch now feeds the model provider **connector** (`openai-compatible`), see [docs/connectors.md](docs/connectors.md); a `Connectors` entry can override it per tenant. Only the provider, endpoint and models change. The routing policy (task → tier, escalation, budgets, schema validation, kill switch) stays in `rules/gateway/models.yaml`. The provider choice is part of the hashed config snapshot that every run records. Hosted providers default to `MaxConcurrentCalls: 4`, no temperature/seed (reasoning-family models reject them), a 4096-token output reserve and a 250k-token run budget.
 
 ## Windows laptop (16 GB) with the OpenAI API
 
@@ -81,7 +81,7 @@ Only the provider, endpoint and models change. The routing policy (task → tier
 
 ## Open in Cursor or Claude Code
 
-- **Cursor:** `git clone https://github.com/zulq2019/security-triage-agent-poc && cd security-triage-agent-poc && git checkout feature/slice-1-tracer-bullet && cursor .` (or File → Open Folder). Install the C# Dev Kit extension when prompted; open `SecAgent.slnx`.
+- **Cursor:** `git clone https://github.com/zulq2019/security-triage-agent-poc && cd security-triage-agent-poc && cursor .` (or File → Open Folder). The default branch holds the full POC. Install the C# Dev Kit extension when prompted; open `SecAgent.slnx`.
 - **Claude Code:** in the repo root run `claude`. `CLAUDE.md` points at `AGENTS.md` (build/test commands, layout and the guardrails an assistant must not weaken).
 - Both tools inherit your shell environment, so start them from a terminal where `OPENAI_API_KEY` / `SECAGENT_SQL` are set (or set them at user scope as above).
 
@@ -112,6 +112,11 @@ Every model call writes one `ModelUsage` row (`db/migrations/002_model_usage.sql
 
 `replay-static/` holds a static build of the clean run (`index.html` + `run.json` + `run.js` + `assets/app.js`). Open `replay-static/index.html` in a browser (works from `file://`) or serve the folder with any static server. The dashboard plays back the real event stream with its recorded timings, with 1×/2× speed and a Replay button, and is marked "Replay of a recorded run". Rebuild it from any run with `scripts/build-replay.sh [run-id]` (uses `secagent export`, which refuses to write if a secret pattern is found). The replay also has a **Trends** tab after Usage (replay only, **sample data, illustrative**: every number, repo, team and CVE id is synthetic, CVE-SAMPLE-*; KPI targets are placeholders). It is generated by `scripts/build-trends-sample.py` (ported from the trends mockup) into `src/SecAgent.Dashboard/replay/trends.html`, and `build-replay.sh` injects it; deep link `?tab=trends` (works for any tab). It also has a **Connections** tab after Trends (replay only, **mockup: not connected to real systems**): connector cards (GitHub, Black Duck, Azure OpenAI / OpenAI, Jira, Microsoft Teams, Azure Key Vault, plus a coming-soon row), a searchable *Add connector* picker, a 4-step connect flow for GitHub/Jira (access requested, repos/projects, where secrets live, done), per-repo settings and a Wipro-hosted / Customer-hosted switch. All state is in-browser only and resets on reload; no network calls, tokens or OAuth. Source `src/SecAgent.Dashboard/replay/connections.html`, injected by `build-replay.sh`; deep link `?tab=connections`. A copy (absolute `/security-agent/` paths) is deployed behind basic auth as the `/security-agent` section of the demo site (`security-agent-demo.vercel.app`).
 
+## Run one container per agent
+
+`docker compose up --build -d` runs SQL Server and the 11 agents, one container each (same images CI builds; queues are a shared folder
+locally, Service Bus in Azure). Copy `deploy/compose.env.example` to `.env` first. How it works, CI/CD and the design: [docs/containers.md](docs/containers.md).
+
 ## Run it (Linux / this box)
 
 Prerequisites: .NET 10 SDK, Ollama with the models pulled (or a hosted provider, see above), SQL Server (local), gitleaks/trivy/semgrep on `PATH`, and `gh` signed in with push access to the sample repo.
@@ -134,7 +139,8 @@ dotnet src/SecAgent.Dashboard/bin/Debug/net10.0/secagent.dll run --repo zulq2019
 Tests:
 
 ```bash
-dotnet test tests/SecAgent.Tests --filter "Category!=Golden"   # unit tests (needs local SQL + Ollama for the context/routing tests)
+dotnet test tests/SecAgent.Tests --filter "Category!=Golden"   # unit and integration tests (needs local SQL from SECAGENT_SQL)
+dotnet test tests/SecAgent.Eval.Tests                          # eval harness tests (no SQL, no model)
 dotnet test tests/SecAgent.Tests --filter "Category=Golden"    # golden tests against the latest completed run in the store
 scripts/rerun-check.sh                                          # D-06: re-run on the same PR opens no duplicate PRs
 ```

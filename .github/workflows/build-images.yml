@@ -1,0 +1,188 @@
+# Builds one image per agent. The agent list is NOT written here: the plan job reads deploy/agents.json (single source of truth,
+# shared with the worker host, docker-compose and deploy.yml), so adding an agent is a one-line catalogue change.
+#
+#   pull_request / any branch : build every image (buildx) -> Trivy scan -> CycloneDX SBOM -> artifacts. Nothing is pushed.
+#   main (and vars.ACR_NAME set): the same, then push to Azure Container Registry via OIDC (no stored registry passwords).
+#
+# Repository settings needed only for the push (placeholders; none are in this repo):
+#   vars.ACR_NAME                       e.g. crsecagentdev (registry name, without .azurecr.io)
+#   secrets.AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID
+#                                       Entra app / user-assigned identity with a federated credential for this repo + the
+#                                       "container-registry" environment, holding AcrPush on the registry. Nothing else.
+name: build-images
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "rules/**"
+      - "db/**"
+      - "deploy/**"
+      - "Directory.*"
+      - "SecAgent.slnx"
+      - ".dockerignore"
+      - ".github/workflows/build-images.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  TRIVY_VERSION: 0.75.0
+  TRIVY_SHA256: c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f
+
+jobs:
+  plan:
+    name: plan (matrix from deploy/agents.json)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      prefix: ${{ steps.matrix.outputs.prefix }}
+      push: ${{ steps.push.outputs.push }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: matrix
+        name: Read catalogue
+        run: |
+          set -euo pipefail
+          matrix="$(jq -c '{include: [.agents[] | {agent: .name, target: .imageTarget}]}' deploy/agents.json)"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "prefix=$(jq -r '.imageRepositoryPrefix' deploy/agents.json)" >> "$GITHUB_OUTPUT"
+          jq -r '.include[] | "- \(.agent) (target \(.target))"' <<< "$matrix" >> "$GITHUB_STEP_SUMMARY"
+      - id: push
+        name: Decide whether to push
+        env:
+          ACR_NAME: ${{ vars.ACR_NAME }}
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ -n "$ACR_NAME" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  image:
+    name: image ${{ matrix.agent }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      IMAGE: ${{ needs.plan.outputs.prefix }}-${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Layers are shared per Dockerfile target, so the cache scope is the target, not the agent.
+      - name: Build (load locally for scanning)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: ${{ matrix.target }}
+          build-args: AGENT_ROLE=${{ matrix.agent }}
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ env.IMAGE }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.target }}
+
+      # Trivy from the pinned release binary + checksum (not trivy-action / setup-trivy: see docs/containers.md, supply-chain note).
+      - name: Install Trivy (pinned + checksum)
+        run: |
+          set -euo pipefail
+          curl -fsSLo /tmp/trivy.tgz "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  /tmp/trivy.tgz" | sha256sum -c -
+          tar -xzf /tmp/trivy.tgz -C /tmp trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+
+      - name: SBOM (CycloneDX)
+        run: trivy image --quiet --format cyclonedx --output "sbom-${{ matrix.agent }}.cdx.json" "$IMAGE:$GITHUB_SHA"
+
+      - name: Vulnerability report (SARIF, all severities)
+        run: trivy image --quiet --format sarif --output "trivy-${{ matrix.agent }}.sarif" "$IMAGE:$GITHUB_SHA"
+
+      # Gate: fail on HIGH/CRITICAL that already have a fix (unfixed base-image CVEs are reported above, not blocking).
+      - name: Vulnerability gate
+        run: trivy image --quiet --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed --scanners vuln "$IMAGE:$GITHUB_SHA"
+
+      - name: Upload SBOM + scan
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.agent }}
+          path: |
+            sbom-${{ matrix.agent }}.cdx.json
+            trivy-${{ matrix.agent }}.sarif
+          if-no-files-found: warn
+          retention-days: 30
+
+  push:
+    name: push ${{ matrix.agent }} to ACR
+    needs: [plan, image]
+    if: needs.plan.outputs.push == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: container-registry
+    permissions:
+      contents: read
+      id-token: write          # OIDC token for azure/login; no registry password exists anywhere
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      IMAGE: ${{ needs.plan.outputs.prefix }}-${{ matrix.agent }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login (token from the OIDC session)
+        run: az acr login --name "$ACR_NAME"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Same inputs + same cache scope as the scanned build, so this is a cache hit; adds BuildKit SBOM + provenance attestations.
+      - name: Build and push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: ${{ matrix.target }}
+          build-args: AGENT_ROLE=${{ matrix.agent }}
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=${{ env.IMAGE }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+
+      - name: Summary
+        run: echo "- \`${ACR_NAME}.azurecr.io/${IMAGE}:${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"

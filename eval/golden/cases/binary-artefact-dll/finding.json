@@ -1,0 +1,31 @@
+{
+  "finding_id": "079fc72f-db38-4741-9525-810ee573f092",
+  "schema_version": "1.1.0",
+  "source_scanner": "binary_check",
+  "scanner_version": "secagent-binary-check@0.1.0",
+  "scanner_rule_id": "binary-artefact",
+  "issue_type": "binary_artefact",
+  "title": "Committed binary lib/Legacy.Pdf.dll",
+  "cve_ids": [],
+  "cwe_ids": [],
+  "severity_scanner": "medium",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "lib/Legacy.Pdf.dll",
+  "attributes": {
+    "size": "51",
+    "sha256": "e049bf46d7e55d459e5a5a1d5de0cddb2e34605f0d8ed534301c8d8086d3b540"
+  },
+  "fingerprint": "f6901cd730f66ed27e855295a8f76fa6edaa7d713c5de7414f88d67c1893404b",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/binary-artefact-dll/raw.json",
+  "sarif_ref": "blob://eval/binary-artefact-dll/scan.sarif",
+  "created_by_run": "5b9aca43-5a32-4b34-9590-f165516dbbe6"
+}

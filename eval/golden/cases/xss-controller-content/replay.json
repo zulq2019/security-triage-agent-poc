@@ -1,0 +1,24 @@
+{
+  "case_id": "xss-controller-content",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "6b9202b9043da4319419f1b8efef894fa169073ee3babd2c876aada0f5cbe77e",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Query parameter concatenated into a text/html response without encoding: reflected XSS (CWE-79).",
+        "confidence": 0.9
+      }
+    },
+    "fix": {
+      "prompt_sha256": "ef16040fe1b4dd9fbee6d0d10cb97f4e3bf93434338b51e3d0742159180e6f5d",
+      "response": {
+        "method_code": "public ContentResult Greet(string name)\n{\n    return Content(\"<p>Hello \" + System.Net.WebUtility.HtmlEncode(name) + \"</p>\", \"text/html\");\n}\n",
+        "test_code": "[Fact]\npublic void Greet_encodes_markup_in_the_name()\n{\n    var html = new GreetingController().Greet(\"<script>alert(1)</script>\").Content!;\n    Assert.DoesNotContain(\"<script>\", html);\n    Assert.Contains(\"&lt;script&gt;\", html);\n}\n",
+        "explanation": "HTML-encode the caller-supplied name before writing it into the HTML response."
+      }
+    }
+  }
+}

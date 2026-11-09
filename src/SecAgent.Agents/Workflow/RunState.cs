@@ -11,6 +11,8 @@ public sealed class RunState
 {
     public required RunRecord Run { get; init; }
     public required PrInfo Pr { get; init; }
+    /// <summary>Tenant that owns the repository (connector clients are resolved per tenant). Single-tenant deployments: the constant tenant.</summary>
+    public string TenantId { get; init; } = "default";
     public required Feed Feed { get; init; }
     public required RunBudget Budget { get; init; }
     public required bool FreshTriage { get; init; }
@@ -27,6 +29,8 @@ public sealed class RunState
     public ConcurrentDictionary<Guid, Finding> Findings { get; } = new();
     public ConcurrentDictionary<string, int> AgentTokens { get; } = new();
     public int RetriesUsed;
+    /// <summary>1 once the outbound step (tickets + notifier card) ran for this run.</summary>
+    public int OutboundPublished;
     public int Injections;
     public int PrsOpened;
     public int PrsReused;

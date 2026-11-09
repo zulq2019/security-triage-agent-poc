@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- GitHub source control connector: REST API (api.github.com or GHES /api/v3) over a named HttpClient with the resilience handler,
+       plus plain `git push` (never forced) for fix branches built in the pipeline's local worktree. No merge capability exists here:
+       the interface has no merge method and NoMergeGuardHandler refuses merge / approve / branch-protection endpoints at the HTTP level. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Connectors/SecAgent.Connectors.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SecAgent.Tests" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,36 @@
+{
+  "id": "nuget-major-upgrade-breaking",
+  "title": "Fixed version is a breaking major upgrade",
+  "category": "vulnerable_dependency",
+  "description": "AutoMapper 8.1.1 with a (synthetic) advisory fixed only in 9.0.0, which removed the static Mapper API the code uses. The bump does not compile, so the verifier must stop it: no fix PR, escalate to a human (fix_failed).",
+  "tags": [
+    "negative",
+    "nuget",
+    "breaking_major_upgrade"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "library",
+    "outcome": "needs_human",
+    "human_tasks": [
+      "fix_failed"
+    ]
+  },
+  "checks": [
+    {
+      "type": "no_new_findings"
+    }
+  ],
+  "target": {
+    "rule": "vulnerable-package",
+    "file": "src/App/App.csproj"
+  },
+  "package_versions": {
+    "AutoMapper": [
+      "8.1.1",
+      "9.0.0",
+      "10.1.1"
+    ]
+  },
+  "notes": "The pipeline has no explicit major-version guard; the build/test verifier is what stops the PR. The pipeline retries a failed fix up to policies.retries.max_fix_retries; the harness makes one attempt."
+}

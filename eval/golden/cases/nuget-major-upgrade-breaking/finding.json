@@ -1,0 +1,38 @@
+{
+  "finding_id": "768d7b6f-ad0b-41d7-bade-e00dd95dff33",
+  "schema_version": "1.1.0",
+  "source_scanner": "trivy",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "GHSA-SAMPLE-0002",
+  "issue_type": "vulnerable_dependency",
+  "title": "AutoMapper 8.1.1: unbounded object graph mapping (synthetic advisory)",
+  "cve_ids": [
+    "CVE-SAMPLE-2026-0002"
+  ],
+  "cwe_ids": [
+    "CWE-400"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/App.csproj",
+  "component_name": "nuget/AutoMapper",
+  "component_version": "8.1.1",
+  "fixed_version": "9.0.0",
+  "direct_or_transitive": "direct",
+  "attributes": {
+    "package": "AutoMapper"
+  },
+  "fingerprint": "ae6cb93310f1b569525c91918b079aa173100cbcb56dbc712043194891effc30",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/nuget-major-upgrade-breaking/raw.json",
+  "sarif_ref": "blob://eval/nuget-major-upgrade-breaking/scan.sarif",
+  "created_by_run": "d59cbb59-772f-4798-a973-755aeec8386f"
+}

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Connector contracts (ports): small segregated interfaces + DTOs for source control, issue tracker, scanner source, model provider and
+       notifier, plus the plug-in, tenant-connection, secret and audit contracts. No SecAgent references and no third-party packages:
+       the pipeline (SecAgent.Agents) depends on this project only, never on a connector implementation. -->
+  <PropertyGroup>
+    <RootNamespace>SecAgent.Connectors</RootNamespace>
+  </PropertyGroup>
+</Project>

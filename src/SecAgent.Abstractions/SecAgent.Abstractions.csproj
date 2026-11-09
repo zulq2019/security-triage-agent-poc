@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Ports (interfaces + DTOs) shared across the pipeline (SecAgent.Agents), the intake (SecAgent.Intake) and its adapters
+       (SecAgent.Intake.Azure, the dashboard). Depends on the domain model only: no pipeline, web or cloud types. -->
+  <ItemGroup>
+    <ProjectReference Include="../SecAgent.Core/SecAgent.Core.csproj" />
+  </ItemGroup>
+</Project>

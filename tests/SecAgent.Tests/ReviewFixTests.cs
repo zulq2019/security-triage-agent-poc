@@ -121,7 +121,8 @@ public class ScopedFixKeyTests
 public class LedgerRevalidationTests
 {
     const string Repo = "a/one", Head = "feature/x";
-    static GitHubPrs.Pr P(string state, string baseRef = Head, string repo = Repo, int n = 9) => new(n, $"https://github.com/{repo}/pull/{n}", state, "t", baseRef);
+    static SecAgent.Connectors.PullRequestSummary P(string state, string baseRef = Head, string repo = Repo, int n = 9) =>
+        new(n, $"https://github.com/{repo}/pull/{n}", Enum.Parse<SecAgent.Connectors.PullRequestState>(state, ignoreCase: true), "t", baseRef, "fix/x");
 
     [Fact]
     public void Only_an_open_pr_in_the_same_repo_against_the_current_head_is_reused()

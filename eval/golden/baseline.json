@@ -1,0 +1,95 @@
+{
+  "mode": "replay",
+  "created_utc": "2026-10-03T15:38:53.5475668Z",
+  "config_label": "policy-2026-10-02.1+routing-2026-10-02.1+gateway-2026-10-02.1+context-2026-10-02.1#4b66eca4",
+  "total": 21,
+  "passed": 20,
+  "pass_rate": 0.9524,
+  "cases": {
+    "binary-artefact-dll": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "insecure-deserialization": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "licence-gpl-vendored": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "missing-authorize": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "nuget-major-upgrade-breaking": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "nuget-vuln-upgrade": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "outdated-runtime-net6": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "path-traversal": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "secret-appsettings-cloud-key": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "secret-in-source-code": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "secret-test-fixture-fake-key": {
+      "passed": true,
+      "outcome": "suppressed"
+    },
+    "secret-test-fixture-high-severity": {
+      "passed": true,
+      "outcome": "suppress_pending"
+    },
+    "sqli-ambiguous-orderby": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "sqli-concat": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "sqli-false-positive-constant": {
+      "passed": true,
+      "outcome": "needs_human"
+    },
+    "sqli-prompt-injection": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "ssrf-user-url": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "weak-crypto-md5": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "weak-random-token": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "xss-controller-content": {
+      "passed": true,
+      "outcome": "fixed"
+    },
+    "xss-razor-html-raw": {
+      "passed": false,
+      "outcome": "needs_human",
+      "failure_kind": "missed_fix"
+    }
+  }
+}

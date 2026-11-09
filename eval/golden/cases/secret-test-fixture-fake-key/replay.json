@@ -1,0 +1,16 @@
+{
+  "case_id": "secret-test-fixture-fake-key",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "a160fe16c6186f63b808bcc7b1e691486b2e75f0e01d6fd1d602e8e9c1be99c1",
+      "response": {
+        "decision": "suppress",
+        "severity_effective": "medium",
+        "reason": "Sandbox-prefixed key in a test fixture; rule test-fixture-test-key matched (path + test_key_prefix) at medium severity.",
+        "confidence": 0.9
+      }
+    }
+  }
+}

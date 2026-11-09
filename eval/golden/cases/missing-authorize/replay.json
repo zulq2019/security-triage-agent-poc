@@ -1,0 +1,24 @@
+{
+  "case_id": "missing-authorize",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "f05e63e9cc2027ebee513f84fc6492dc3b821e292b11f723191ae84e4de184b5",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "State-changing admin endpoint without any authorization attribute (CWE-862).",
+        "confidence": 0.85
+      }
+    },
+    "fix": {
+      "prompt_sha256": "43236d4b1cd796d507e430135ff5b8e2e96b0915ad45eb38ad43a6342b6e2539",
+      "response": {
+        "method_code": "[Authorize(Roles = \"Admin\")]\npublic IActionResult DeleteUser(int id)\n{\n    return NoContent();\n}\n",
+        "test_code": "[Fact]\npublic void DeleteUser_requires_the_admin_role()\n{\n    var attr = typeof(AdminController).GetMethod(nameof(AdminController.DeleteUser))!.GetCustomAttribute<AuthorizeAttribute>();\n    Assert.NotNull(attr);\n    Assert.Equal(\"Admin\", attr!.Roles);\n}\n",
+        "explanation": "Require the Admin role on the DELETE endpoint; Health keeps [AllowAnonymous]."
+      }
+    }
+  }
+}

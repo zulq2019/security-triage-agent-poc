@@ -1,0 +1,50 @@
+{
+  "id": "nuget-vuln-upgrade",
+  "title": "Vulnerable NuGet package with a compatible fixed version",
+  "category": "vulnerable_dependency",
+  "description": "Direct PackageReference to Newtonsoft.Json 12.0.3 with a (synthetic) advisory fixed in 13.0.1. Expected: bump to the lowest safe version, build and tests still pass.",
+  "tags": [
+    "positive",
+    "nuget"
+  ],
+  "expected": {
+    "triage": "fix",
+    "fixer": "library",
+    "outcome": "fixed",
+    "severity_effective": "high"
+  },
+  "checks": [
+    {
+      "type": "builds"
+    },
+    {
+      "type": "tests_pass",
+      "min_tests": 1
+    },
+    {
+      "type": "package_version_at_least",
+      "package": "Newtonsoft.Json",
+      "min_version": "13.0.1"
+    },
+    {
+      "type": "no_new_findings"
+    },
+    {
+      "type": "diff_allowed_files",
+      "allowed": [
+        "src/App/App.csproj"
+      ]
+    }
+  ],
+  "target": {
+    "rule": "vulnerable-package",
+    "file": "src/App/App.csproj"
+  },
+  "package_versions": {
+    "Newtonsoft.Json": [
+      "12.0.3",
+      "13.0.1",
+      "13.0.3"
+    ]
+  }
+}

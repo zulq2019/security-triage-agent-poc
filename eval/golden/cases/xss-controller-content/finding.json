@@ -1,0 +1,37 @@
+{
+  "finding_id": "098c0518-0cf3-4f5d-ac44-c39eeb9273c2",
+  "schema_version": "1.1.0",
+  "source_scanner": "semgrep",
+  "scanner_version": "eval-fixture@1.0.0",
+  "scanner_rule_id": "csharp.aspnet.reflected-xss",
+  "issue_type": "unsafe_code",
+  "title": "Reflected XSS in Greet()",
+  "cve_ids": [],
+  "cwe_ids": [
+    "CWE-79"
+  ],
+  "severity_scanner": "high",
+  "severity_effective": null,
+  "repo": "zulq2019/sec-agent-eval-fixture",
+  "branch": "feature/eval-change",
+  "pr_number": 101,
+  "commit_sha": "e7a1c0de5eed0001",
+  "file_path": "src/App/Controllers/GreetingController.cs",
+  "line_start": 12,
+  "line_end": 12,
+  "message": "Reflected XSS in Greet()",
+  "attributes": {
+    "enclosing_symbol": "Greet",
+    "function_start": "10",
+    "function_end": "13"
+  },
+  "fingerprint": "3e9c01285507b4902e70ec8c2da12b7e0730bbaaec8a2ed1a08df09734fcb943",
+  "occurrence_count": 1,
+  "status": "NEW",
+  "first_seen": "2026-10-01T09:00:00Z",
+  "last_seen": "2026-10-01T09:00:00Z",
+  "classification": "confidential",
+  "raw_evidence_ref": "blob://eval/xss-controller-content/raw.json",
+  "sarif_ref": "blob://eval/xss-controller-content/scan.sarif",
+  "created_by_run": "d58febd6-866b-41ce-b04e-8b655c767a9b"
+}

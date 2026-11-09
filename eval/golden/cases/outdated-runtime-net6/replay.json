@@ -1,0 +1,16 @@
+{
+  "case_id": "outdated-runtime-net6",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "127d8453f76c5e3ae2047d25d22446e4d15e16f598e2a280ed93e750a6eb9e5c",
+      "response": {
+        "decision": "fix",
+        "severity_effective": "high",
+        "reason": "Runtime is out of support and receives no security fixes; a supported LTS target (10.0) exists.",
+        "confidence": 0.8
+      }
+    }
+  }
+}

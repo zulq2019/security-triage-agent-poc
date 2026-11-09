@@ -1,0 +1,25 @@
+{
+  "id": "sqli-ambiguous-orderby",
+  "title": "Ambiguous fix: caller-chosen ORDER BY column",
+  "category": "sql_injection",
+  "description": "An identifier (sort column) cannot be bound as a parameter; a fix needs an allow-list of columns, which is a behaviour decision. The model is unsure (confidence 0.45), so the policy must route it to a human instead of guessing.",
+  "tags": [
+    "negative",
+    "sast",
+    "ambiguous_fix"
+  ],
+  "expected": {
+    "triage": "needs_human",
+    "fixer": null,
+    "outcome": "needs_human"
+  },
+  "checks": [
+    {
+      "type": "no_changes"
+    }
+  ],
+  "target": {
+    "rule": "sql-built-from-input",
+    "file": "src/App/Data/ReportRepository.cs"
+  }
+}

@@ -1,0 +1,8 @@
+@model App.Models.ProfileViewModel
+@{
+    ViewData["Title"] = "Profile";
+}
+<h1>@Model.DisplayName</h1>
+<section class="bio">
+    @Html.Raw(Model.Bio)
+</section>

@@ -1,0 +1,16 @@
+{
+  "case_id": "sqli-false-positive-constant",
+  "source": "authored-reference",
+  "note": "Hand-written reference answers (what a correct agent returns for this case). Not a recording of a real model call.",
+  "steps": {
+    "triage": {
+      "prompt_sha256": "a23daddf09662b040477e2ebd1a59b735a34d5c7d165ce3f8106725581be55ef",
+      "response": {
+        "decision": "suppress",
+        "severity_effective": "low",
+        "reason": "Only a compile-time constant (TableName) is concatenated; no caller-supplied value reaches the SQL text. Likely false positive.",
+        "confidence": 0.85
+      }
+    }
+  }
+}

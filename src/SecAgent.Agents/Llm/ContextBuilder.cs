@@ -8,11 +8,15 @@ public sealed record ComponentInput(string Type, string SourceRef, string Conten
 
 public sealed record PackResult(ContextPack Pack, List<InjectionDetector.Hit> InjectionHits);
 
-/// <summary>Builds one ContextPack per model call (PRD section 6): select components for the agent, mask secrets,
-/// neutralise instruction-like repo text, count tokens, trim optional components in the configured order, hash, store.</summary>
-public sealed class ContextBuilder(ConfigSnapshot cfg, SecretMasker masker, SqlStore store, LocalBlobStore blob)
+/// <summary>An assembled (not yet stored) context pack and its canonical content (what is hashed and stored).</summary>
+public sealed record AssembledContext(ContextPack Pack, List<InjectionDetector.Hit> InjectionHits, string Canonical);
+
+/// <summary>Assembles one ContextPack (PRD section 6) without persisting it: select components for the agent, mask secrets,
+/// neutralise instruction-like repo text, count tokens, trim optional components in the configured order, hash.
+/// Used by <see cref="ContextBuilder"/> (which stores the pack) and by the evaluation harness (same assembly rules, no store).</summary>
+public sealed class ContextAssembler(ConfigSnapshot cfg, SecretMasker masker)
 {
-    public PackResult Build(Guid runId, string agentId, Guid? findingId, string? fixGroupKey, IEnumerable<ComponentInput> inputs)
+    public AssembledContext Assemble(Guid runId, string agentId, Guid? findingId, string? fixGroupKey, IEnumerable<ComponentInput> inputs)
     {
         var ac = cfg.Context.Agents[agentId];
         var prompt = cfg.Prompts[ac.Prompt];
@@ -78,9 +82,22 @@ public sealed class ContextBuilder(ConfigSnapshot cfg, SecretMasker masker, SqlS
         pack.UserText = sb.ToString();
         var canonical = JsonSerializer.Serialize(new { prompt = $"{prompt.Id}@{prompt.Version}", components = included.Select(c => new { c.Type, c.SourceRef, c.Content }) }, Schema.Json);
         pack.ContentHash = "sha256:" + Hashing.Sha256(canonical);
-        pack.ContentRef = blob.Put("evidence", $"{runId}/context-packs/{pack.ContextPackId}.json", canonical).Uri;
-        store.InsertContextPack(pack);
-        return new PackResult(pack, hits);
+        return new AssembledContext(pack, hits, canonical);
+    }
+}
+
+/// <summary>Builds one ContextPack per model call (PRD section 6): assemble (<see cref="ContextAssembler"/>), then store the canonical
+/// content write-once in the evidence container and the pack row in SQL.</summary>
+public sealed class ContextBuilder(ConfigSnapshot cfg, SecretMasker masker, SqlStore store, LocalBlobStore blob)
+{
+    readonly ContextAssembler _assembler = new(cfg, masker);
+
+    public PackResult Build(Guid runId, string agentId, Guid? findingId, string? fixGroupKey, IEnumerable<ComponentInput> inputs)
+    {
+        var a = _assembler.Assemble(runId, agentId, findingId, fixGroupKey, inputs);
+        a.Pack.ContentRef = blob.Put("evidence", $"{runId}/context-packs/{a.Pack.ContextPackId}.json", a.Canonical).Uri;
+        store.InsertContextPack(a.Pack);
+        return new PackResult(a.Pack, a.InjectionHits);
     }
 
     /// <summary>Run summary component: built by code from canonical Run and Finding fields only (no other finding's code or secrets).</summary>
